@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const config = fs.readFileSync(new URL('../Beatrice-Surge.conf', import.meta.url), 'utf8');
-const urls = [...new Set([...config.matchAll(/^RULE-SET,(https:\/\/[^,]+)/gm)].map(match => match[1]))];
+const externalResources = [...config.matchAll(/^(RULE-SET|DOMAIN-SET),(https:\/\/[^,]+)/gm)].map(match => ({ kind: match[1], url: match[2] }));
+const urls = [...new Set(externalResources.map(resource => resource.url))];
+const resourceKinds = new Map(externalResources.map(resource => [resource.url, resource.kind]));
 const failures = [];
 const downloadedRules = new Map();
 
@@ -11,6 +13,7 @@ const expectations = new Map([
   ['non_ip/ai.conf', { min: 20, max: 1_000, contains: ['DOMAIN-SUFFIX,chatgpt.com', 'DOMAIN-SUFFIX,claude.ai', 'DOMAIN,api.github.com'] }],
   ['non_ip/apple_cn.conf', { min: 5, max: 200, contains: ['DOMAIN-SUFFIX,cn.apple.com'] }],
   ['non_ip/apple_services.conf', { min: 10, max: 500, contains: ['DOMAIN-SUFFIX,apple.com'] }],
+  ['domainset/apple_cdn.conf', { kind: 'DOMAIN-SET', min: 100, max: 500, contains: ['.s.mzstatic.com', '.apps.mzstatic.com', '.is1-ssl.mzstatic.com'] }],
   ['non_ip/domestic.conf', { min: 300, max: 20_000, contains: ['DOMAIN,b23.tv', 'DOMAIN-SUFFIX,bilibili.com'] }],
   ['ip/ai.conf', { min: 5, max: 5_000, family: 'ip' }],
   ['ip/china_ip.conf', { min: 1_000, max: 100_000, family: 'ip' }]
@@ -61,6 +64,14 @@ function parseExternalRule(line, key) {
   return { type, value: fields[1], fields };
 }
 
+function parseDomainEntry(line, key) {
+  if (line.includes(',')) throw new Error(`${key}: DOMAIN-SET entry must not contain commas: ${line}`);
+  const suffix = line.startsWith('.');
+  const value = suffix ? line.slice(1) : line;
+  if (!value || !/^[A-Za-z0-9_.-]+$/.test(value) || value.startsWith('.') || value.endsWith('.')) throw new Error(`${key}: malformed DOMAIN-SET entry ${line}`);
+  return { type: suffix ? 'DOMAIN-SUFFIX' : 'DOMAIN', value };
+}
+
 for (const url of urls) {
   const key = new URL(url).pathname.replace(/^\/List\//, '');
   const expected = expectations.get(key);
@@ -68,6 +79,8 @@ for (const url of urls) {
     failures.push(`${url}: no explicit drift contract`);
     continue;
   }
+  const expectedKind = expected.kind || 'RULE-SET';
+  if (resourceKinds.get(url) !== expectedKind) failures.push(`${key}: expected ${expectedKind}, profile uses ${resourceKinds.get(url)}`);
   try {
     const response = await fetch(url, {
       headers: { 'user-agent': 'Beatrice-Surge-Config drift audit' },
@@ -81,9 +94,9 @@ for (const url of urls) {
     if (lines.length < expected.min || lines.length > expected.max) failures.push(`${key}: abnormal size ${lines.length}, expected ${expected.min}..${expected.max}`);
     const parsed = [];
     for (const line of lines) {
-      try { parsed.push(parseExternalRule(line, key)); }
+      try { parsed.push(expectedKind === 'DOMAIN-SET' ? parseDomainEntry(line, key) : parseExternalRule(line, key)); }
       catch (error) { failures.push(error.message); }
-      if (/(?:^|,)pre-matching(?:,|$)/.test(line)) failures.push(`${key}: forbidden rule-set entry ${line}`);
+      if (expectedKind === 'RULE-SET' && /(?:^|,)pre-matching(?:,|$)/.test(line)) failures.push(`${key}: forbidden rule-set entry ${line}`);
     }
     downloadedRules.set(url, parsed);
     for (const contract of expected.contains || []) if (!lines.includes(contract)) failures.push(`${key}: missing critical contract ${contract}`);
@@ -133,7 +146,7 @@ function routeHost(host) {
   for (const rule of localRules) {
     if (domainMatches(rule.type, rule.value, host)) return rule.policy;
     if (rule.type === 'RULE-SET' && rule.value === 'SYSTEM' && [...systemHosts].some(value => domainMatches('DOMAIN-SUFFIX', value, host))) return rule.policy;
-    if (rule.type === 'RULE-SET' && downloadedRules.get(rule.value)?.some(entry => domainMatches(entry.type, entry.value, host))) return rule.policy;
+    if (['RULE-SET', 'DOMAIN-SET'].includes(rule.type) && downloadedRules.get(rule.value)?.some(entry => domainMatches(entry.type, entry.value, host))) return rule.policy;
     if (rule.type === 'FINAL') return rule.policy;
   }
   return null;
@@ -142,8 +155,11 @@ function routeHost(host) {
 const liveRouteMatrix = new Map([
   ['chatgpt.com', '🤖 AI'], ['claude.ai', '🤖 AI'], ['gemini.google', '🤖 AI'],
   ['api.github.com', '🚀 手动选择'], ['apple-relay.apple.com', '🤖 AI'], ['gspe1-ssl.ls.apple.com', '🤖 AI'],
-  ['ls.apple.com', 'DIRECT'], ['cn.apple.com', 'DIRECT'], ['music.apple.com', '🍎 Apple'],
+  ['ls.apple.com', 'DIRECT'], ['cn.apple.com', 'DIRECT'], ['gateway.icloud.com.cn', 'DIRECT'],
+  ['music.apple.com', '🍎 Apple'], ['sandbox.itunes.apple.com', '🍎 Apple'],
   ['icloud.com', '🍎 Apple'], ['appstore.com', '🍎 Apple'],
+  ['apps.mzstatic.com', '🍎 Apple'], ['s.mzstatic.com', '🍎 Apple'], ['is1-ssl.mzstatic.com', '🍎 Apple'],
+  ['afs.ampaeservices.com', '🍎 Apple'],
   ['youtube.com', '🌍 流媒体'], ['netflix.com', '🌍 流媒体'], ['disneyplus.com', '🌍 流媒体'],
   ['spotify.com', '🌍 流媒体'], ['tiktok.com', '🌍 流媒体'], ['primevideo.com', '🌍 流媒体'],
   ['bilibili.com', '🚀 手动选择'], ['b23.tv', '🚀 手动选择'],
@@ -158,5 +174,5 @@ if (failures.length) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
-console.log(`External RULE-SET drift audit PASS (${urls.length} resources)`);
+console.log(`External rule resource drift audit PASS (${urls.length} resources)`);
 console.log(`Live upstream first-match routes PASS (${liveRouteMatrix.size} hosts)`);

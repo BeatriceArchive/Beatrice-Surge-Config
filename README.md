@@ -35,7 +35,7 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 
 策略分三层：
 
-1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`、`🍎 Apple`。手动入口导入全部真实节点；AI、流媒体和 Apple 通过六个地区与手动入口复用节点，不重复展开 raw proxies。Apple 首选项固定为 `DIRECT`，需要时可手动切换六区或全局手动节点。
+1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`、`🍎 Apple`。手动入口导入全部真实节点；AI、流媒体和 Apple 通过六个地区与手动入口复用节点，不重复展开 raw proxies。Apple 首选项固定为 `DIRECT`，需要时可手动切换六区或全局手动节点；该选择覆盖主要 Apple 用户服务和主要 Apple CDN/static assets，不宣称覆盖所有 Apple 或共享 CDN 流量。
 2. 地区人工层：香港、日本、新加坡、美国、台湾、韩国。每组默认使用自动 helper，也能持久固定真实地区节点。
 3. 地区自动层：隐藏的 `fallback` helper。每个 helper 都把 `REJECT` 作为首个显式成员，再按地区 regex 导入运行时节点。
 
@@ -56,7 +56,7 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 - 带 `no-resolve` 的 IP 规则和 GEOIP
 - 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
-明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM 与 Apple 中国服务保持 DIRECT，`apple_services.conf` 进入默认 DIRECT 的 `🍎 Apple`；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
+明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM 与 Apple 中国服务保持 DIRECT，`apple_services.conf` 与 SKK `domainset/apple_cdn.conf` 进入默认 DIRECT 的 `🍎 Apple`。真机确认但 upstream 尚未覆盖的 `afs.ampaeservices.com` 使用精确本地规则，不扩大为整个 suffix；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
 
 ## 确定性验证
 
@@ -78,8 +78,8 @@ node scripts/validate-config.mjs
 - IP-bound rules 的 `no-resolve`
 - 活动 URL allowlist、全配置（含注释）公共 URL 门禁、具体节点与常见凭据泄漏检测
 - 精度优先的地区 regex（美国支持 `USA` 且排除 `South America`、`USAID`、`USDT` 等），以及零节点、单区、部分六区、完整六区、纯长尾、混合、重名和 126 节点场景
-- 23 个高价值 hostname 的 first-match 路由矩阵，覆盖 Apple Intelligence、SYSTEM、Apple 中国与 Apple 通用服务的优先级
-- 38 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
+- 29 个高价值 hostname 的 first-match 路由矩阵，覆盖 Apple Intelligence、SYSTEM、Apple 中国、Apple 通用服务与 Apple CDN 的优先级
+- 44 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
 - 合法演进 fixture：新增合法业务组、`include-other-group`、logical rule、公共文档注释和图标变化不会被文本快照误杀
 
 规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
@@ -92,7 +92,7 @@ node scripts/validate-config.mjs
 node scripts/audit-external-rules.mjs
 ```
 
-它检查当前 7 个外部 RULE-SET 的可达性、非空、语法、合理规模、IP-only 规则族和少量关键契约，并用实时下载的完整上游内容模拟当前 profile 的 first-match 路由。22 个关键 hostname 用来发现 AI、Apple、流媒体、Bilibili、国内与 FINAL 之间的真实捕获冲突。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常、关键契约丢失或最终路由语义改变才失败。
+它检查当前 8 个外部规则资源（7 个 `RULE-SET`、1 个 `DOMAIN-SET`）的可达性、非空、格式、合理规模、IP-only 规则族和少量关键契约，并用实时下载的完整上游内容模拟当前 profile 的 first-match 路由。28 个关键 hostname 用来发现 AI、Apple 服务/CDN、流媒体、Bilibili、国内与 FINAL 之间的真实捕获冲突。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常、关键契约丢失或最终路由语义改变才失败。
 
 外部网络检查刻意不进入 required CI，因此同一仓库 commit 的主要验证不会随上游 mutable 内容或临时网络故障随机变化。
 

@@ -21,6 +21,7 @@ const REQUIRED_GENERAL = new Map([
 ]);
 const MANUAL = '🚀 手动选择';
 const APPLE = '🍎 Apple';
+const APPLE_CDN_URL = 'https://ruleset.skk.moe/List/domainset/apple_cdn.conf';
 const SERVICES = ['🤖 AI', '🌍 流媒体', APPLE];
 const REMOVED_GROUPS = ['📺 哔哩哔哩', '🍎 苹果服务', '🌐 兜底策略', '🚀 手动切换', '🤖 AI服务', '🌍 国外流媒体'];
 const REGIONS = [
@@ -350,7 +351,7 @@ for (const rule of rules) {
   uniqueRules.add(normalized);
   if (rule.type === 'MATCH') fail('MATCH is forbidden; use FINAL');
   if (rule.policy && !groups.has(rule.policy) && !BUILTINS.has(rule.policy)) fail(`undefined rule policy ${rule.policy}`);
-  if (rule.type === 'RULE-SET' && /^http:\/\//i.test(rule.fields[1] || '')) fail(`external RULE-SET must use HTTPS: ${rule.raw}`);
+  if (['RULE-SET', 'DOMAIN-SET'].includes(rule.type) && /^http:\/\//i.test(rule.fields[1] || '')) fail(`external ${rule.type} must use HTTPS: ${rule.raw}`);
   const ipBound = rule.type.startsWith('IP-') || ['GEOIP', 'IP-ASN'].includes(rule.type) || (rule.type === 'RULE-SET' && /\/ip\//i.test(rule.fields[1] || ''));
   if (ipBound && !rule.fields.includes('no-resolve')) fail(`IP-bound rule lost no-resolve: ${rule.raw}`);
 }
@@ -360,6 +361,8 @@ subsequence(rules, [
   /apple_intelligence\.conf,🤖 AI(?:,|$)/,
   /^RULE-SET,SYSTEM,DIRECT(?:,|$)/,
   /apple_services\.conf,🍎 Apple(?:,|$)/,
+  /domainset\/apple_cdn\.conf,🍎 Apple(?:,|$)/,
+  /^DOMAIN,afs\.ampaeservices\.com,🍎 Apple(?:,|$)/,
   /^DOMAIN-SUFFIX,youtube\.com,🌍 流媒体(?:,|$)/,
   /^DOMAIN-SUFFIX,b23\.tv,🚀 手动选择(?:,|$)/,
   /^DOMAIN-SUFFIX,cn,DIRECT(?:,|$)/,
@@ -374,15 +377,21 @@ for (const rule of bilibili) if (rule.policy !== MANUAL) fail(`Bilibili rule mus
 const appleIntelligenceRule = rules.find(rule => rule.fields[1]?.endsWith('/apple_intelligence.conf'));
 const appleCnRule = rules.find(rule => rule.fields[1]?.endsWith('/apple_cn.conf'));
 const appleServicesRule = rules.find(rule => rule.fields[1]?.endsWith('/apple_services.conf'));
+const appleCdnRules = rules.filter(rule => rule.type === 'DOMAIN-SET' && rule.fields[1] === APPLE_CDN_URL);
+const ampaeRules = rules.filter(rule => rule.type === 'DOMAIN' && rule.fields[1] === 'afs.ampaeservices.com');
 if (appleIntelligenceRule?.policy !== '🤖 AI') fail('Apple Intelligence must use 🤖 AI');
 if (appleCnRule?.policy !== 'DIRECT') fail('Apple China services must remain DIRECT');
 if (appleServicesRule?.policy !== APPLE) fail(`general Apple services must use ${APPLE}`);
+if (appleCdnRules.length !== 1) fail('exactly one Apple CDN DOMAIN-SET dependency is required');
+else if (appleCdnRules[0].policy !== APPLE) fail(`Apple CDN must use ${APPLE}`);
+if (ampaeRules.length !== 1 || ampaeRules[0].policy !== APPLE) fail(`afs.ampaeservices.com must use ${APPLE}`);
 
 const remoteHostContracts = new Map([
   ['https://ruleset.skk.moe/List/non_ip/apple_intelligence.conf', new Set(['apple-relay.apple.com', 'gspe1-ssl.ls.apple.com'])],
   ['https://ruleset.skk.moe/List/non_ip/ai.conf', new Set(['chatgpt.com', 'claude.ai', 'gemini.google', 'api.github.com'])],
   ['https://ruleset.skk.moe/List/non_ip/apple_cn.conf', new Set(['cn.apple.com'])],
-  ['https://ruleset.skk.moe/List/non_ip/apple_services.conf', new Set(['music.apple.com', 'icloud.com', 'appstore.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/apple_services.conf', new Set(['music.apple.com', 'sandbox.itunes.apple.com', 'icloud.com', 'appstore.com'])],
+  [APPLE_CDN_URL, new Set(['apps.mzstatic.com', 's.mzstatic.com', 'is1-ssl.mzstatic.com'])],
   ['https://ruleset.skk.moe/List/non_ip/domestic.conf', new Set(['baidu.com', 'b23.tv', 'bilibili.com'])]
 ]);
 const systemHosts = new Set(['ls.apple.com']);
@@ -398,7 +407,7 @@ function routeHost(host) {
   for (const rule of rules) {
     if (['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD'].includes(rule.type) && domainMatches(rule.type, rule.fields[1], host)) return rule.policy;
     if (rule.type === 'RULE-SET' && rule.fields[1] === 'SYSTEM' && [...systemHosts].some(value => domainMatches('DOMAIN-SUFFIX', value, host))) return rule.policy;
-    if (rule.type === 'RULE-SET' && remoteHostContracts.get(rule.fields[1])?.has(host)) return rule.policy;
+    if (['RULE-SET', 'DOMAIN-SET'].includes(rule.type) && remoteHostContracts.get(rule.fields[1])?.has(host)) return rule.policy;
     if (rule.type === 'FINAL') return rule.policy;
   }
   return null;
@@ -406,8 +415,9 @@ function routeHost(host) {
 const routeMatrix = new Map([
   ['chatgpt.com', '🤖 AI'], ['claude.ai', '🤖 AI'], ['gemini.google', '🤖 AI'],
   ['deepseek.com', '🤖 AI'], ['apple-relay.apple.com', '🤖 AI'], ['gspe1-ssl.ls.apple.com', '🤖 AI'],
-  ['api.github.com', MANUAL], ['ls.apple.com', 'DIRECT'], ['cn.apple.com', 'DIRECT'],
-  ['music.apple.com', APPLE], ['icloud.com', APPLE], ['appstore.com', APPLE],
+  ['api.github.com', MANUAL], ['ls.apple.com', 'DIRECT'], ['cn.apple.com', 'DIRECT'], ['gateway.icloud.com.cn', 'DIRECT'],
+  ['music.apple.com', APPLE], ['sandbox.itunes.apple.com', APPLE], ['icloud.com', APPLE], ['appstore.com', APPLE],
+  ['apps.mzstatic.com', APPLE], ['s.mzstatic.com', APPLE], ['is1-ssl.mzstatic.com', APPLE], ['afs.ampaeservices.com', APPLE],
   ['youtube.com', '🌍 流媒体'], ['netflix.com', '🌍 流媒体'], ['disneyplus.com', '🌍 流媒体'],
   ['spotify.com', '🌍 流媒体'], ['tiktok.com', '🌍 流媒体'], ['primevideo.com', '🌍 流媒体'],
   ['bilibili.com', MANUAL], ['b23.tv', MANUAL], ['baidu.com', 'DIRECT'],
@@ -524,6 +534,15 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['Bilibili captured as domestic', source => source.replace('DOMAIN-SUFFIX,b23.tv,🚀 手动选择,extended-matching', 'DOMAIN-SUFFIX,b23.tv,DIRECT,extended-matching')],
     ['Apple services bypass selector', source => source.replace('apple_services.conf,🍎 Apple,no-resolve', 'apple_services.conf,DIRECT,no-resolve')],
     ['Apple Intelligence captured by Apple', source => source.replace('apple_intelligence.conf,🤖 AI,extended-matching', 'apple_intelligence.conf,🍎 Apple,extended-matching')],
+    ['Apple CDN points DIRECT', source => source.replace('domainset/apple_cdn.conf,🍎 Apple,extended-matching', 'domainset/apple_cdn.conf,DIRECT,extended-matching')],
+    ['Apple CDN points manual', source => source.replace('domainset/apple_cdn.conf,🍎 Apple,extended-matching', 'domainset/apple_cdn.conf,🚀 手动选择,extended-matching')],
+    ['Apple CDN removed', source => source.replace(/^DOMAIN-SET,https:\/\/ruleset\.skk\.moe\/List\/domainset\/apple_cdn\.conf.*\n/m, '')],
+    ['Apple CDN duplicated', source => source.replace(/^DOMAIN-SET,https:\/\/ruleset\.skk\.moe\/List\/domainset\/apple_cdn\.conf.*$/m, match => `${match}\n${match}`)],
+    ['Apple CDN before Apple Intelligence', source => {
+      const cdn = `DOMAIN-SET,${APPLE_CDN_URL},🍎 Apple,extended-matching`;
+      return source.replace(`${cdn}\n`, '').replace('RULE-SET,https://ruleset.skk.moe/List/non_ip/apple_intelligence.conf,🤖 AI,extended-matching', `${cdn}\nRULE-SET,https://ruleset.skk.moe/List/non_ip/apple_intelligence.conf,🤖 AI,extended-matching`);
+    }],
+    ['ampaeservices wrong policy', source => source.replace('DOMAIN,afs.ampaeservices.com,🍎 Apple,extended-matching', 'DOMAIN,afs.ampaeservices.com,🚀 手动选择,extended-matching')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
     ['unknown rule type', source => source.replace('DOMAIN-SUFFIX,youtube.com', 'DOMAIN-SUFIX,youtube.com')],
     ['malformed logical rule', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'AND,((DOMAIN-SUFFIX,youtube.com)),🌍 流媒体,extended-matching')],
