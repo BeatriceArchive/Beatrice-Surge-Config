@@ -12,6 +12,7 @@ const fail = message => errors.push(message);
 
 const REQUIRED_GENERAL = new Map([
   ['dns-server', 'system'], ['use-local-host-item-for-proxy', 'false'], ['compatibility-mode', '3'],
+  ['proxy-test-url', 'http://www.gstatic.com/generate_204'], ['test-timeout', '5'],
   ['ipv6', 'false'], ['ipv6-vif', 'disabled'], ['wifi-assist', 'false'], ['all-hybrid', 'false'],
   ['udp-priority', 'true'], ['udp-policy-not-supported-behaviour', 'reject'], ['allow-wifi-access', 'false'],
   ['allow-hotspot-access', 'false'], ['proxy-restricted-to-lan', 'true'], ['include-all-networks', 'true'],
@@ -277,6 +278,45 @@ const bilibili = rules.filter(rule => /(^|,)(b23\.tv|[^,]*bili[^,]*|upos-bstar[^
 if (!bilibili.length) fail('Bilibili must retain an independent rule corpus');
 for (const rule of bilibili) if (rule.policy !== '📺 哔哩哔哩') fail(`Bilibili rule escaped its independent policy: ${rule.raw}`);
 
+const remoteHostContracts = new Map([
+  ['https://ruleset.skk.moe/List/non_ip/apple_intelligence.conf', new Set(['apple-relay.apple.com', 'gspe1-ssl.ls.apple.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/ai.conf', new Set(['chatgpt.com', 'claude.ai', 'gemini.google', 'api.github.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/apple_cn.conf', new Set(['cn.apple.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/apple_services.conf', new Set(['music.apple.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/domestic.conf', new Set(['baidu.com', 'b23.tv', 'bilibili.com'])]
+]);
+const systemHosts = new Set(['ls.apple.com']);
+const domainMatches = (type, value, host) => {
+  const normalized = host.toLowerCase();
+  const target = value.toLowerCase();
+  if (type === 'DOMAIN') return normalized === target;
+  if (type === 'DOMAIN-SUFFIX') return normalized === target || normalized.endsWith(`.${target}`);
+  if (type === 'DOMAIN-KEYWORD') return normalized.includes(target);
+  return false;
+};
+function routeHost(host) {
+  for (const rule of rules) {
+    if (['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD'].includes(rule.type) && domainMatches(rule.type, rule.fields[1], host)) return rule.policy;
+    if (rule.type === 'RULE-SET' && rule.fields[1] === 'SYSTEM' && [...systemHosts].some(value => domainMatches('DOMAIN-SUFFIX', value, host))) return rule.policy;
+    if (rule.type === 'RULE-SET' && remoteHostContracts.get(rule.fields[1])?.has(host)) return rule.policy;
+    if (rule.type === 'FINAL') return rule.policy;
+  }
+  return null;
+}
+const routeMatrix = new Map([
+  ['chatgpt.com', '🤖 AI服务'], ['claude.ai', '🤖 AI服务'], ['gemini.google', '🤖 AI服务'],
+  ['deepseek.com', '🤖 AI服务'], ['apple-relay.apple.com', '🤖 AI服务'], ['gspe1-ssl.ls.apple.com', '🤖 AI服务'],
+  ['api.github.com', '🌐 兜底策略'], ['ls.apple.com', 'DIRECT'], ['music.apple.com', '🍎 苹果服务'],
+  ['youtube.com', '🌍 国外流媒体'], ['netflix.com', '🌍 国外流媒体'], ['disneyplus.com', '🌍 国外流媒体'],
+  ['spotify.com', '🌍 国外流媒体'], ['tiktok.com', '🌍 国外流媒体'], ['primevideo.com', '🌍 国外流媒体'],
+  ['bilibili.com', '📺 哔哩哔哩'], ['b23.tv', '📺 哔哩哔哩'], ['baidu.com', 'DIRECT'],
+  ['representative.cn', 'DIRECT'], ['unrelated-foreign.example', '🌐 兜底策略']
+]);
+for (const [host, expected] of routeMatrix) {
+  const actual = routeHost(host);
+  if (actual !== expected) fail(`known-host routing regression: ${host} -> ${actual}, expected ${expected}`);
+}
+
 if (/^\s*#!MANAGED-CONFIG\b/im.test(text)) fail('public shell must not contain managed-config');
 if (/^\s*[^#\[\n]+\s*=\s*(ss|vmess|trojan|snell|tuic|hysteria2|anytls|wireguard|http|https|socks5|socks5-tls)\s*,/im.test(text)) fail('public shell contains concrete proxy node');
 if (/\b(password|private-key|username|token)\s*=\s*[^\s,#]+/i.test(text)) fail('public shell appears to contain credentials');
@@ -286,7 +326,8 @@ for (const line of [...active(sec.get('General')), ...active(sec.get('Proxy Grou
       const url = new URL(match[0]);
       const trustedRule = url.protocol === 'https:' && url.hostname === 'ruleset.skk.moe' && url.pathname.startsWith('/List/');
       const trustedIcon = url.protocol === 'https:' && url.hostname === 'raw.githubusercontent.com' && (/^\/Aioneas\/Surge\//.test(url.pathname) || /^\/Rabbit-Spec\/Surge\//.test(url.pathname));
-      if (!trustedRule && !trustedIcon) fail(`untrusted active public URL: ${url.href}`);
+      const trustedTest = url.protocol === 'http:' && url.hostname === 'www.gstatic.com' && url.pathname === '/generate_204';
+      if (!trustedRule && !trustedIcon && !trustedTest) fail(`untrusted active public URL: ${url.href}`);
     } catch { fail(`malformed active URL: ${match[0]}`); }
   }
 }
@@ -329,6 +370,8 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['region hidden', source => source.replace('🇺🇸 美国节点 = select, ⚡ 美国自动,', '🇺🇸 美国节点 = select, ⚡ 美国自动, hidden=true,')],
     ['policy cycle', source => source.replace('🚀 手动切换 = select, 🇭🇰 香港节点,', '🚀 手动切换 = select, 🌐 兜底策略, 🇭🇰 香港节点,')],
     ['General changed', source => source.replace('ipv6 = false', 'ipv6 = true')],
+    ['GitHub captured by AI', source => source.replace('DOMAIN,api.github.com,🌐 兜底策略,extended-matching', 'DOMAIN,api.github.com,🤖 AI服务,extended-matching')],
+    ['Bilibili captured as domestic', source => source.replace('DOMAIN-SUFFIX,b23.tv,📺 哔哩哔哩,extended-matching', 'DOMAIN-SUFFIX,b23.tv,DIRECT,extended-matching')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
     ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
     ['FINAL not last', source => source.replace('FINAL,🌐 兜底策略,dns-failed', 'FINAL,🌐 兜底策略,dns-failed\nDOMAIN,after-final.example,DIRECT')]
@@ -363,4 +406,5 @@ console.log(`- Compact service policies: ${COMPACT.length}`);
 console.log(`- Regional selectors/helpers: ${REGIONS.length}`);
 console.log(`- Dynamic node scenarios: ${scenarios.length}`);
 console.log('- Parser/tokenizer, policy graph, regex, rules, public safety: PASS');
-console.log('- Negative fixtures rejected normally: 15');
+console.log(`- Known-host first-match routes: ${routeMatrix.size}`);
+console.log('- Negative fixtures rejected normally: 17');
