@@ -33,7 +33,7 @@ const REGIONS = [
 ];
 const REGIONAL = REGIONS.map(([manual]) => manual);
 const REQUIRED_VISIBLE = [MANUAL, ...SERVICES, ...REGIONAL];
-const BUILTINS = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'REJECT-NO-DROP', 'REJECT-TINYGIF', 'CELLULAR', 'CELLULAR-ONLY', 'HYBRID', 'NO-HYBRID', 'PASS']);
+const BUILTINS = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'REJECT-NO-DROP', 'REJECT-TINYGIF', 'CELLULAR', 'CELLULAR-ONLY', 'HYBRID', 'NO-HYBRID']);
 const GROUP_TYPES = new Set(['select', 'url-test', 'fallback', 'load-balance', 'smart', 'subnet', 'ssid']);
 const GROUP_PARAMS = new Set([
   'no-alert', 'hidden', 'icon-url', 'underlying-proxy', 'policy-path', 'update-interval',
@@ -45,43 +45,58 @@ const RULE_TYPES = new Set([
   'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'DOMAIN-SET',
   'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'IP-ASN', 'USER-AGENT', 'URL-REGEX', 'PROCESS-NAME',
   'DEST-PORT', 'SRC-PORT', 'IN-PORT', 'SRC-IP', 'DEVICE-NAME', 'MAC-ADDRESS', 'PROTOCOL',
-  'HOSTNAME-TYPE', 'SUBNET', 'CELLULAR-RADIO', 'CELLULAR-CARRIER', 'RULE-SET', 'FINAL'
+  'HOSTNAME-TYPE', 'SUBNET', 'CELLULAR-RADIO', 'CELLULAR-CARRIER', 'RULE-SET', 'AND', 'OR', 'NOT', 'FINAL'
 ]);
+const LOGICAL_TYPES = new Set(['AND', 'OR', 'NOT']);
 const RULE_FLAGS = new Set(['no-resolve', 'dns-failed', 'extended-matching', 'pre-matching', 'requires-resolve']);
 const RULE_KEY_PARAMS = new Set(['notification-text', 'notification-interval', 'update-interval', 'always-capture']);
 
 function stripComment(line) {
-  let quoted = false;
+  let quote = null;
   let escaped = false;
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
     if (escaped) { escaped = false; continue; }
-    if (quoted && char === '\\') { escaped = true; continue; }
-    if (char === '"') { quoted = !quoted; continue; }
-    if (!quoted && i > 0 && /\s/.test(line[i - 1]) && (char === '#' || char === ';' || (char === '/' && line[i + 1] === '/'))) return line.slice(0, i).trimEnd();
+    if (quote && char === '\\') { escaped = true; continue; }
+    if (char === '"' || char === "'") {
+      if (quote === char) quote = null;
+      else if (!quote) quote = char;
+      continue;
+    }
+    if (!quote && i > 0 && /\s/.test(line[i - 1]) && (char === '#' || char === ';' || (char === '/' && line[i + 1] === '/'))) return line.slice(0, i).trimEnd();
   }
-  if (quoted) throw new Error('unterminated quoted value');
+  if (quote) throw new Error('unterminated quoted value');
   if (escaped) throw new Error('dangling escape in quoted value');
   return line;
 }
 
-function csv(value, context) {
+function csv(value, context, parenthesisAware = false) {
   const tokens = [];
   let token = '';
-  let quoted = false;
+  let quote = null;
   let escaped = false;
+  let depth = 0;
   for (const char of value) {
     if (escaped) {
-      if (char !== '"' && char !== '\\') throw new Error(`${context}: unsupported escape \\${char}`);
+      if (char !== quote && char !== '\\') throw new Error(`${context}: unsupported escape \\${char}`);
       token += char;
       escaped = false;
-    } else if (quoted && char === '\\') escaped = true;
-    else if (char === '"') quoted = !quoted;
-    else if (char === ',' && !quoted) { tokens.push(token.trim()); token = ''; }
+    } else if (quote && char === '\\') escaped = true;
+    else if (char === '"' || char === "'") {
+      if (quote === char) quote = null;
+      else if (!quote) quote = char;
+      else token += char;
+    } else if (!quote && parenthesisAware && char === '(') { depth += 1; token += char; }
+    else if (!quote && parenthesisAware && char === ')') {
+      depth -= 1;
+      if (depth < 0) throw new Error(`${context}: unmatched closing parenthesis`);
+      token += char;
+    } else if (char === ',' && !quote && depth === 0) { tokens.push(token.trim()); token = ''; }
     else token += char;
   }
-  if (quoted) throw new Error(`${context}: unterminated quoted value`);
+  if (quote) throw new Error(`${context}: unterminated quoted value`);
   if (escaped) throw new Error(`${context}: dangling escape in quoted value`);
+  if (depth) throw new Error(`${context}: unmatched opening parenthesis`);
   tokens.push(token.trim());
   if (tokens.some(token => !token)) throw new Error(`${context}: empty comma-separated component`);
   return tokens;
@@ -182,29 +197,64 @@ function detectCycles(groups) {
     if (state.get(name) === 1) { fail(`policy cycle: ${[...stack, name].join(' -> ')}`); return; }
     if (state.get(name) === 2) return;
     state.set(name, 1); stack.push(name);
-    for (const member of groups.get(name)?.members || []) if (groups.has(member)) visit(member);
+    const group = groups.get(name);
+    for (const member of [...(group?.members || []), ...(group?.includedGroups || [])]) if (groups.has(member)) visit(member);
     stack.pop(); state.set(name, 2);
   };
   for (const name of groups.keys()) visit(name);
+}
+function logicalOperands(expression, context) {
+  if (!expression.startsWith('(') || !expression.endsWith(')')) throw new Error(`${context}: logical expression must be parenthesized`);
+  const inner = expression.slice(1, -1).trim();
+  if (!inner) throw new Error(`${context}: empty logical expression`);
+  const operands = csv(inner, context, true);
+  return operands.map(operand => {
+    if (!operand.startsWith('(') || !operand.endsWith(')')) throw new Error(`${context}: each logical operand must be parenthesized`);
+    return operand.slice(1, -1).trim();
+  });
+}
+function validateRuleParameters(components, context) {
+  const parameters = new Set();
+  for (const component of components) {
+    const i = component.indexOf('=');
+    const key = (i < 0 ? component : component.slice(0, i)).toLowerCase();
+    if ((i < 0 && !RULE_FLAGS.has(key)) || (i >= 0 && !RULE_KEY_PARAMS.has(key))) throw new Error(`${context}: unsupported parameter ${key}`);
+    if (i >= 0 && !component.slice(i + 1).trim()) throw new Error(`${context}: empty parameter value for ${key}`);
+    if (parameters.has(key)) throw new Error(`${context}: duplicate parameter ${key}`);
+    parameters.add(key);
+  }
+}
+function validateLogical(type, expression, context, depth = 1) {
+  if (depth > 10) throw new Error(`${context}: logical nesting exceeds Surge's depth limit of 10`);
+  const operands = logicalOperands(expression, context);
+  if (type === 'NOT' && operands.length !== 1) throw new Error(`${context}: NOT requires exactly one operand`);
+  if (type !== 'NOT' && operands.length < 2) throw new Error(`${context}: ${type} requires at least two operands`);
+  for (const operand of operands) {
+    const fields = csv(operand, `${context} operand`, true);
+    const subType = fields[0]?.toUpperCase();
+    if (subType === 'SCRIPT') throw new Error(`${context}: SCRIPT is intentionally outside this public profile's product boundary`);
+    if (!RULE_TYPES.has(subType) || subType === 'FINAL') throw new Error(`${context}: unsupported logical operand type ${subType}`);
+    if (LOGICAL_TYPES.has(subType)) {
+      if (fields.length !== 2) throw new Error(`${context}: nested ${subType} must omit a policy and contain one expression`);
+      validateLogical(subType, fields[1], context, depth + 1);
+    } else {
+      if (fields.length < 2) throw new Error(`${context}: ${subType} operand is missing its match value`);
+      validateRuleParameters(fields.slice(2), `${context} ${subType} operand`);
+    }
+  }
 }
 function parseRules(lines) {
   const output = [];
   for (const line of active(lines)) {
     try {
-      const fields = csv(line, `rule ${line}`);
+      const leadingType = line.slice(0, line.indexOf(',')).trim().toUpperCase();
+      const fields = csv(line, `rule ${line}`, LOGICAL_TYPES.has(leadingType));
       const type = fields[0].toUpperCase();
       if (!RULE_TYPES.has(type)) throw new Error(`rule ${line}: unsupported rule type ${type}`);
       if ((type === 'FINAL' && fields.length < 2) || (type !== 'FINAL' && fields.length < 3)) throw new Error(`rule ${line}: missing match value or policy`);
       const parameterStart = type === 'FINAL' ? 2 : 3;
-      const parameters = new Set();
-      for (const component of fields.slice(parameterStart)) {
-        const i = component.indexOf('=');
-        const key = (i < 0 ? component : component.slice(0, i)).toLowerCase();
-        if ((i < 0 && !RULE_FLAGS.has(key)) || (i >= 0 && !RULE_KEY_PARAMS.has(key))) throw new Error(`rule ${line}: unsupported parameter ${key}`);
-        if (i >= 0 && !component.slice(i + 1).trim()) throw new Error(`rule ${line}: empty parameter value for ${key}`);
-        if (parameters.has(key)) throw new Error(`rule ${line}: duplicate parameter ${key}`);
-        parameters.add(key);
-      }
+      if (LOGICAL_TYPES.has(type)) validateLogical(type, fields[1], `rule ${line}`);
+      validateRuleParameters(fields.slice(parameterStart), `rule ${line}`);
       output.push({ raw: line, fields, type, policy: type === 'FINAL' ? fields[1] : fields[2] });
     } catch (error) { fail(error.message); }
   }
@@ -227,6 +277,14 @@ const general = parseGeneral(sec.get('General'));
 for (const [key, expected] of REQUIRED_GENERAL) if (general.get(key)?.toLowerCase() !== expected) fail(`[General] ${key} must remain ${expected}`);
 
 const groups = parseGroups(sec.get('Proxy Group'));
+for (const [name, group] of groups) {
+  const included = group.params.get('include-other-group');
+  group.includedGroups = [];
+  if (included) {
+    try { group.includedGroups = csv(included, `group ${name} include-other-group`); }
+    catch (error) { fail(error.message); }
+  }
+}
 for (const name of REQUIRED_VISIBLE) {
   const group = groups.get(name);
   if (!group) fail(`missing core group ${name}`);
@@ -272,8 +330,10 @@ for (const [manualName, helperName, regex, positive, negative] of REGIONS) {
 }
 for (const [name, group] of groups) {
   if (group.type === 'smart') fail(`${name}: smart cannot preserve this nested fail-closed model`);
-  if (!group.members.length && !['smart', 'subnet', 'ssid'].includes(group.type)) fail(`${name}: empty policy group`);
+  const hasImportedMembers = group.includedGroups.length || group.params.get('include-all-proxies') === 'true' || group.params.has('policy-path');
+  if (!group.members.length && !hasImportedMembers && !['smart', 'subnet', 'ssid'].includes(group.type)) fail(`${name}: empty policy group`);
   for (const member of group.members) if (!groups.has(member) && !BUILTINS.has(member)) fail(`${name} references undefined policy ${member}`);
+  for (const included of group.includedGroups) if (!groups.has(included)) fail(`${name} include-other-group references undefined group ${included}`);
 }
 detectCycles(groups);
 
@@ -372,6 +432,15 @@ for (const line of [...active(sec.get('General')), ...active(sec.get('Proxy Grou
     } catch { fail(`malformed active URL: ${match[0]}`); }
   }
 }
+const publicConfigHosts = new Set(['manual.nssurge.com', 'github.com', 'raw.githubusercontent.com', 'ruleset.skk.moe', 'www.gstatic.com']);
+for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+  const candidate = match[0].replace(/[),.;]+$/, '');
+  try {
+    const url = new URL(candidate);
+    if (url.username || url.password || url.search || url.hash) fail(`credential-bearing or parameterized URL is forbidden in public config text: ${candidate}`);
+    if (!publicConfigHosts.has(url.hostname)) fail(`untrusted URL in public config text: ${candidate}`);
+  } catch { fail(`malformed URL in public config text: ${candidate}`); }
+}
 
 const scenarios = [
   { name: 'zero nodes', nodes: [], matched: [] },
@@ -400,16 +469,18 @@ for (const scenario of scenarios) {
 }
 
 try {
-  const probe = csv('select, "Node, with comma", external-policy-modifier="test-url=http://example.com/a,b,tfo=true", "escaped \\"quote\\""', 'tokenizer self-test');
-  const expected = ['select', 'Node, with comma', 'external-policy-modifier=test-url=http://example.com/a,b,tfo=true', 'escaped "quote"'];
+  const probe = csv('select, "Node, with comma", \'Single, comma\', external-policy-modifier="test-url=http://example.com/a,b,tfo=true", "escaped \\"quote\\"", \'escaped \\\'quote\\\'\'', 'tokenizer self-test');
+  const expected = ['select', 'Node, with comma', 'Single, comma', 'external-policy-modifier=test-url=http://example.com/a,b,tfo=true', 'escaped "quote"', "escaped 'quote'"];
   if (JSON.stringify(probe) !== JSON.stringify(expected)) fail('comma-aware tokenizer self-test failed');
+  const commented = stripComment("DOMAIN,'value # still quoted',DIRECT # public comment");
+  if (commented !== "DOMAIN,'value # still quoted',DIRECT") fail('quote-aware inline comment self-test failed');
 } catch (error) { fail(`comma-aware tokenizer self-test crashed: ${error.message}`); }
 
 if (!errors.length && process.env.SKIP_LEGAL_FIXTURE !== '1') {
   const legal = text
     .replace('/Icon/Global.png', '/Icon/Final.png')
-    .replace('[Rule]', '🧪 合法扩展 = select, 🚀 手动选择, hidden=true\n\n[Rule]')
-    .replace('# Final\n', '# A non-critical comment may evolve.\nDOMAIN-SUFFIX,legal-evolution.example,🧪 合法扩展,extended-matching\n\n# Final\n');
+    .replace('[Rule]', "🧪 合法来源 = select, '🚀 手动选择', hidden=true\n🧪 合法扩展 = select, include-other-group='🧪 合法来源', hidden=true\n\n[Rule]")
+    .replace('# Final\n', '# Public syntax reference: https://manual.nssurge.com/rules/logical.html\nAND,((DOMAIN-SUFFIX,legal-evolution.example),(OR,((PROTOCOL,TCP),(NOT,((DEST-PORT,53)))))),🧪 合法扩展,extended-matching\n\n# Final\n');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-legal-'));
   try {
     const fixturePath = path.join(directory, 'legal.conf');
@@ -428,6 +499,7 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['duplicate section', source => `${source}\n[Rule]\nFINAL,DIRECT\n`],
     ['duplicate General key', source => source.replace('ipv6 = false', 'ipv6 = false\nipv6 = false')],
     ['malformed quote', source => source.replace('icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png', 'icon-url="https://example.com/a,b.png')],
+    ['malformed single quote', source => source.replace('icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png', "icon-url='https://example.com/a,b.png")],
     ['empty group component', source => source.replace('🤖 AI = select,', '🤖 AI = select,,')],
     ['duplicate group parameter', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, REJECT, hidden=true,')],
     ['unknown group type', source => source.replace('⚡ 美国自动 = fallback,', '⚡ 美国自动 = typo,')],
@@ -442,6 +514,8 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['helper loses REJECT', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, DIRECT,')],
     ['region hidden', source => source.replace('🇺🇸 美国节点 = select, ⚡ 美国自动,', '🇺🇸 美国节点 = select, ⚡ 美国自动, hidden=true,')],
     ['policy cycle', source => source.replace('🚀 手动选择 = select, 🇭🇰 香港节点,', '🚀 手动选择 = select, 🤖 AI, 🇭🇰 香港节点,')],
+    ['unknown include-other-group', source => source.replace('[Rule]', '🧪 Include = select, DIRECT, include-other-group=Unknown, hidden=true\n[Rule]')],
+    ['include-other-group cycle', source => source.replace('[Rule]', '🧪 Include A = select, DIRECT, include-other-group="🧪 Include B", hidden=true\n🧪 Include B = select, DIRECT, include-other-group="🧪 Include A", hidden=true\n[Rule]')],
     ['removed group returned', source => source.replace('[Rule]', '🌐 兜底策略 = select, 🚀 手动选择\n[Rule]')],
     ['AI loses Korea', source => source.replace(', 🇰🇷 韩国节点, 🚀 手动选择, icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/ChatGPT.png', ', 🚀 手动选择, icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/ChatGPT.png')],
     ['Korea regex false positive', source => source.replace('((South )?Korea|KR)([^A-Za-z]|$)', '((South )?Korea|KR)')],
@@ -452,9 +526,13 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['Apple Intelligence captured by Apple', source => source.replace('apple_intelligence.conf,🤖 AI,extended-matching', 'apple_intelligence.conf,🍎 Apple,extended-matching')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
     ['unknown rule type', source => source.replace('DOMAIN-SUFFIX,youtube.com', 'DOMAIN-SUFIX,youtube.com')],
+    ['malformed logical rule', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'AND,((DOMAIN-SUFFIX,youtube.com)),🌍 流媒体,extended-matching')],
+    ['SCRIPT product boundary', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'SCRIPT,example-script,🌍 流媒体')],
+    ['nonexistent PASS built-in', source => source.replace('DOMAIN-SUFFIX,deepseek.com,🤖 AI,extended-matching', 'DOMAIN-SUFFIX,deepseek.com,PASS,extended-matching')],
     ['unknown rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matcing')],
     ['duplicate rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching,extended-matching')],
     ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
+    ['private comment URL', source => source.replace('# Final', '# old subscription: https://private.example/abcdef123456789\n# Final')],
     ['FINAL not last', source => source.replace('FINAL,🚀 手动选择,dns-failed', 'FINAL,🚀 手动选择,dns-failed\nDOMAIN,after-final.example,DIRECT')]
   ];
   negativeFixtureCount = fixtures.length;

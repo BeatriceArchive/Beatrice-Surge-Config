@@ -16,7 +16,7 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 - password、username、private key、Token 等凭据
 - MITM、Rewrite 或 Script 资产
 
-配置中的活动 URL 采用小型 allowlist：当前只接受明确的规则源、图标源和代理测试端点。README 中的普通文档链接不参与此门禁。
+配置中的活动 URL 采用小型 allowlist：当前只接受明确的规则源、图标源和代理测试端点。注释也会被完整扫描，只允许无凭据、无查询参数的已知公共文档/源码 host，避免旧订阅 URL 藏在禁用文本中；README 中的普通文档链接不参与此门禁。
 
 ## 配置模型
 
@@ -35,11 +35,11 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 
 策略分三层：
 
-1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`。手动入口导入全部真实节点；AI 和流媒体完整引用六个地区与手动入口，不重复展开 raw proxies。
+1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`、`🍎 Apple`。手动入口导入全部真实节点；AI、流媒体和 Apple 通过六个地区与手动入口复用节点，不重复展开 raw proxies。Apple 首选项固定为 `DIRECT`，需要时可手动切换六区或全局手动节点。
 2. 地区人工层：香港、日本、新加坡、美国、台湾、韩国。每组默认使用自动 helper，也能持久固定真实地区节点。
 3. 地区自动层：隐藏的 `fallback` helper。每个 helper 都把 `REJECT` 作为首个显式成员，再按地区 regex 导入运行时节点。
 
-当前用户可见策略组共 9 个：三个高频业务组和六个地区组。六个 `⚡ 地区自动` helper 均使用 `hidden=true`。
+当前用户可见策略组共 10 个：四个业务/全局组和六个地区组。六个 `⚡ 地区自动` helper 均使用 `hidden=true`。
 
 当某地区没有节点时，helper 仍有 `REJECT`，不会成为空组并触发 `SUBSTITUTE → DIRECT`。AI 和流媒体不提供 `DIRECT` 成员；英国、德国、加拿大等长尾地区节点仍可从 `🚀 手动选择` 访问。
 
@@ -49,14 +49,14 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 
 - LAN
 - AI 与 Apple Intelligence 特例
-- SYSTEM 与其他保持 DIRECT 的 Apple 服务
+- SYSTEM、Apple 中国服务与可切换的 Apple 通用服务
 - 国际流媒体
 - 跟随 `🚀 手动选择` 的 Bilibili corpus
 - 中国大陆域名
 - 带 `no-resolve` 的 IP 规则和 GEOIP
 - 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
-明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM、Apple 中国服务与其他 Apple 服务保持 DIRECT；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
+明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM 与 Apple 中国服务保持 DIRECT，`apple_services.conf` 进入默认 DIRECT 的 `🍎 Apple`；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
 
 ## 确定性验证
 
@@ -69,17 +69,18 @@ node scripts/validate-config.mjs
 硬性门禁包括：
 
 - section、General key、policy group 和 group parameter 不得重复
-- 引号、引号内逗号、受支持转义、行内注释和空组件的语法检查
+- 单/双引号、引号内逗号、受支持转义、quote-aware 行内注释和空组件的语法检查
 - General 网络行为契约
-- policy 引用、未定义成员、循环和 FINAL 位置
-- 九个必需可见组、六组地区人工选择及 helper 的 zero-node fail-closed 安全性
-- service group 不得直接铺开 raw proxies 或意外加入 `DIRECT`
+- policy 引用、`include-other-group` 递归依赖、未定义成员、循环和 FINAL 位置
+- Surge `AND` / `OR` / `NOT` 的窄而完整结构验证；公开产品边界继续显式拒绝 `SCRIPT`
+- 十个必需可见组、六组地区人工选择及 helper 的 zero-node fail-closed 安全性
+- service group 不得直接铺开 raw proxies；AI/流媒体不得加入 `DIRECT`，Apple 必须以 `DIRECT` 为首成员
 - IP-bound rules 的 `no-resolve`
-- 公开 URL allowlist、具体节点与常见凭据泄漏检测
-- 地区 regex 正反例，以及零节点、单区、部分六区、完整六区、纯长尾、混合、重名和 126 节点场景
-- 20 个高价值 hostname 的 first-match 路由矩阵
-- 26 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
-- 合法演进 fixture：新增合法业务组、规则和非关键注释不会被文本快照误杀
+- 活动 URL allowlist、全配置（含注释）公共 URL 门禁、具体节点与常见凭据泄漏检测
+- 精度优先的地区 regex（美国支持 `USA` 且排除 `South America`、`USAID`、`USDT` 等），以及零节点、单区、部分六区、完整六区、纯长尾、混合、重名和 126 节点场景
+- 23 个高价值 hostname 的 first-match 路由矩阵，覆盖 Apple Intelligence、SYSTEM、Apple 中国与 Apple 通用服务的优先级
+- 38 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
+- 合法演进 fixture：新增合法业务组、`include-other-group`、logical rule、公共文档注释和图标变化不会被文本快照误杀
 
 规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
 
@@ -91,7 +92,7 @@ node scripts/validate-config.mjs
 node scripts/audit-external-rules.mjs
 ```
 
-它检查当前 7 个外部 RULE-SET 的可达性、非空、语法类型、合理规模、IP-only 规则族和少量关键契约。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常或关键语义丢失才失败。
+它检查当前 7 个外部 RULE-SET 的可达性、非空、语法、合理规模、IP-only 规则族和少量关键契约，并用实时下载的完整上游内容模拟当前 profile 的 first-match 路由。22 个关键 hostname 用来发现 AI、Apple、流媒体、Bilibili、国内与 FINAL 之间的真实捕获冲突。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常、关键契约丢失或最终路由语义改变才失败。
 
 外部网络检查刻意不进入 required CI，因此同一仓库 commit 的主要验证不会随上游 mutable 内容或临时网络故障随机变化。
 
