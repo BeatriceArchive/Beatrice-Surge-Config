@@ -30,6 +30,21 @@ const REGIONS = [
 ];
 const REGIONAL = REGIONS.map(([manual]) => manual);
 const BUILTINS = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'REJECT-NO-DROP', 'REJECT-TINYGIF', 'CELLULAR', 'CELLULAR-ONLY', 'HYBRID', 'NO-HYBRID', 'PASS']);
+const GROUP_TYPES = new Set(['select', 'url-test', 'fallback', 'load-balance', 'smart', 'subnet', 'ssid']);
+const GROUP_PARAMS = new Set([
+  'no-alert', 'hidden', 'icon-url', 'underlying-proxy', 'policy-path', 'update-interval',
+  'policy-regex-filter', 'external-policy-modifier', 'external-policy-name-prefix',
+  'include-all-proxies', 'include-other-group', 'interval', 'timeout', 'evaluate-before-use',
+  'tolerance', 'persistent'
+]);
+const RULE_TYPES = new Set([
+  'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'DOMAIN-SET',
+  'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'IP-ASN', 'USER-AGENT', 'URL-REGEX', 'PROCESS-NAME',
+  'DEST-PORT', 'SRC-PORT', 'IN-PORT', 'SRC-IP', 'DEVICE-NAME', 'MAC-ADDRESS', 'PROTOCOL',
+  'HOSTNAME-TYPE', 'SUBNET', 'CELLULAR-RADIO', 'CELLULAR-CARRIER', 'RULE-SET', 'FINAL'
+]);
+const RULE_FLAGS = new Set(['no-resolve', 'dns-failed', 'extended-matching', 'pre-matching', 'requires-resolve']);
+const RULE_KEY_PARAMS = new Set(['notification-text', 'notification-interval', 'update-interval', 'always-capture']);
 
 function stripComment(line) {
   let quoted = false;
@@ -126,6 +141,7 @@ function parseGroups(lines) {
       if (output.has(name)) { fail(`duplicate group ${name}`); continue; }
       const parts = csv(value, `group ${name}`);
       const type = parts.shift().toLowerCase();
+      if (!GROUP_TYPES.has(type)) throw new Error(`group ${name}: unsupported group type ${type}`);
       const members = [];
       const params = new Map();
       for (const component of parts) {
@@ -135,6 +151,7 @@ function parseGroups(lines) {
           const key = component.slice(0, i).trim().toLowerCase();
           const parameterValue = component.slice(i + 1).trim();
           if (!key || !parameterValue) throw new Error(`group ${name}: malformed parameter ${component}`);
+          if (!GROUP_PARAMS.has(key)) throw new Error(`group ${name}: unsupported parameter ${key}`);
           if (params.has(key)) fail(`group ${name}: duplicate parameter ${key}`);
           else params.set(key, parameterValue);
         }
@@ -172,7 +189,18 @@ function parseRules(lines) {
     try {
       const fields = csv(line, `rule ${line}`);
       const type = fields[0].toUpperCase();
+      if (!RULE_TYPES.has(type)) throw new Error(`rule ${line}: unsupported rule type ${type}`);
       if ((type === 'FINAL' && fields.length < 2) || (type !== 'FINAL' && fields.length < 3)) throw new Error(`rule ${line}: missing match value or policy`);
+      const parameterStart = type === 'FINAL' ? 2 : 3;
+      const parameters = new Set();
+      for (const component of fields.slice(parameterStart)) {
+        const i = component.indexOf('=');
+        const key = (i < 0 ? component : component.slice(0, i)).toLowerCase();
+        if ((i < 0 && !RULE_FLAGS.has(key)) || (i >= 0 && !RULE_KEY_PARAMS.has(key))) throw new Error(`rule ${line}: unsupported parameter ${key}`);
+        if (i >= 0 && !component.slice(i + 1).trim()) throw new Error(`rule ${line}: empty parameter value for ${key}`);
+        if (parameters.has(key)) throw new Error(`rule ${line}: duplicate parameter ${key}`);
+        parameters.add(key);
+      }
       output.push({ raw: line, fields, type, policy: type === 'FINAL' ? fields[1] : fields[2] });
     } catch (error) { fail(error.message); }
   }
@@ -363,6 +391,8 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['malformed quote', source => source.replace('icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png', 'icon-url="https://example.com/a,b.png')],
     ['empty group component', source => source.replace('🤖 AI服务 = select,', '🤖 AI服务 = select,,')],
     ['duplicate group parameter', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, REJECT, hidden=true,')],
+    ['unknown group type', source => source.replace('⚡ 美国自动 = fallback,', '⚡ 美国自动 = typo,')],
+    ['unknown group parameter', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, REJECT, hiddden=true,')],
     ['duplicate group', source => source.replace('[Rule]', `${active(sec.get('Proxy Group'))[0]}\n[Rule]`)],
     ['service raw-node flood', source => source.replace(/(🤖 AI服务 = select,[^\n]*?)(, icon-url=)/, '$1, include-all-proxies=true$2')],
     ['manual loses raw import', source => source.replace(', include-all-proxies=true, icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png', ', icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png')],
@@ -373,6 +403,9 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['GitHub captured by AI', source => source.replace('DOMAIN,api.github.com,🌐 兜底策略,extended-matching', 'DOMAIN,api.github.com,🤖 AI服务,extended-matching')],
     ['Bilibili captured as domestic', source => source.replace('DOMAIN-SUFFIX,b23.tv,📺 哔哩哔哩,extended-matching', 'DOMAIN-SUFFIX,b23.tv,DIRECT,extended-matching')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
+    ['unknown rule type', source => source.replace('DOMAIN-SUFFIX,youtube.com', 'DOMAIN-SUFIX,youtube.com')],
+    ['unknown rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 国外流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 国外流媒体,extended-matcing')],
+    ['duplicate rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 国外流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 国外流媒体,extended-matching,extended-matching')],
     ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
     ['FINAL not last', source => source.replace('FINAL,🌐 兜底策略,dns-failed', 'FINAL,🌐 兜底策略,dns-failed\nDOMAIN,after-final.example,DIRECT')]
   ];
@@ -407,4 +440,4 @@ console.log(`- Regional selectors/helpers: ${REGIONS.length}`);
 console.log(`- Dynamic node scenarios: ${scenarios.length}`);
 console.log('- Parser/tokenizer, policy graph, regex, rules, public safety: PASS');
 console.log(`- Known-host first-match routes: ${routeMatrix.size}`);
-console.log('- Negative fixtures rejected normally: 17');
+console.log('- Negative fixtures rejected normally: 22');

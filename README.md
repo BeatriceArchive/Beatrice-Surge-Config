@@ -76,7 +76,7 @@ node scripts/validate-config.mjs
 - 公开 URL allowlist、具体节点与常见凭据泄漏检测
 - 地区 regex 正反例，以及 0 / 部分 / 全地区 / 重名 / 125 节点场景
 - 20 个高价值 hostname 的 first-match 路由矩阵
-- 17 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
+- 22 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
 
 规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
 
