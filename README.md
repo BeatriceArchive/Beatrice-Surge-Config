@@ -1,104 +1,107 @@
 # Beatrice Surge Config
 
 [![Validate Surge Config](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/validate.yml/badge.svg)](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/validate.yml)
+[![Audit External Rule Drift](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/external-drift.yml/badge.svg)](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/external-drift.yml)
 
-Beatrice 的公开 Surge iOS 配置壳。仓库只保存已经审计的 Surge 原生配置结构，**不保存真实代理节点、订阅地址、密码、Token 或其他私密凭据**。
+Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`、`[Proxy Group]` 和 `[Rule]`，不保存真实代理节点、订阅地址或凭据。
 
-## 架构
+## 架构与边界
 
-```text
-Beatrice-Surge.conf
-        ↓
-Beatrice Sub 获取并转换私人节点
-        ↓
-只生成 Surge [Proxy] 节点行
-        ↓
-注入 / 替换 [Proxy]
-        ↓
-[General] / [Proxy Group] / [Rule] 保持公开模板语义
-```
+`Beatrice-Surge.conf` 故意不包含 `[Proxy]`。运行时由私人订阅层只注入代理节点；公开模板继续决定网络基线、策略组和路由规则。
 
-公开仓库中的 `Beatrice-Surge.conf` 故意没有 `[Proxy]`。它不是节点订阅仓库，而是 Beatrice Sub 的 Surge 原生模板与策略壳。
+公开仓库禁止出现：
 
-## 当前配置模型
+- 真实代理节点和 `[Proxy]`
+- 机场订阅、私人 managed profile URL
+- password、username、private key、Token 等凭据
+- MITM、Rewrite 或 Script 资产
+
+配置中的活动 URL 采用小型 allowlist：当前只接受明确的规则源、图标源和代理测试端点。README 中的普通文档链接不参与此门禁。
+
+## 配置模型
 
 ### General
 
-固定 Surge iOS 网络基线，包括：
-
-- System DNS 与远端代理解析语义
-- VIF `compatibility-mode = 3`
+- System DNS；代理目标默认保持远端解析语义
+- Surge iOS VIF-only：`compatibility-mode = 3`
 - IPv6 关闭
-- Wi‑Fi / 热点代理共享关闭
-- 全网络 VIF 接管范围
-- UDP 与日志行为
+- Wi-Fi / 热点共享关闭
+- 按既定范围接管全网络
+- 不支持 UDP 的策略直接拒绝，避免静默直连
+- ICMP forwarding 关闭
+- `http://www.gstatic.com/generate_204` 作为显式代理可用性测试端点；`test-timeout = 5`
 
 ### Proxy Group
 
-策略控制层分为三层：
+策略分三层：
 
-1. **业务 / 全局层**：`🚀 手动切换`、`🤖 AI服务`、`🌍 国外流媒体`、`📺 哔哩哔哩`、`🍎 苹果服务`、`🌐 兜底策略`。其中只有 `🚀 手动切换` 通过 `include-all-proxies=true` 直接展示全部运行时真实节点；其余业务组只展示地区策略、全局手动入口以及必要的 `DIRECT`，避免在每个业务卡片中重复铺开几十到上百个节点。
-2. **地区人工层**：香港、日本、新加坡、美国、台湾 5 个可见 `select`。默认指向本地区自动 helper，同时通过同一地区 regex 导入真实节点，因此既能保持自动模式，也能持久固定本地区具体节点。
-3. **地区自动层**：`⚡ 香港自动`、`⚡ 日本自动`、`⚡ 新加坡自动`、`⚡ 美国自动`、`⚡ 台湾自动`。这些 helper 使用 `fallback + REJECT` 且 `hidden=true`；地区无匹配节点时保留显式 `REJECT`，避免空组 `SUBSTITUTE → DIRECT`。
+1. 业务 / 全局层：手动、AI、国外流媒体、Bilibili、Apple 和 Final。除全局手动入口外，业务组不重复导入全部真实节点。
+2. 地区人工层：香港、日本、新加坡、美国、台湾。每组默认使用自动 helper，也能持久固定真实地区节点。
+3. 地区自动层：隐藏的 `fallback` helper。每个 helper 都把 `REJECT` 作为首个显式成员，再按地区 regex 导入运行时节点。
 
-`🚀 手动切换` 继续作为全局真实节点入口。业务组需要具体节点时，可以选择对应地区策略并在地区组内固定节点，或选择 `🚀 手动切换` 跟随全局手动状态；Bilibili 仍保留独立 `📺 哔哩哔哩` 策略状态。
+当某地区没有节点时，helper 仍有 `REJECT`，不会成为空组并触发 `SUBSTITUTE → DIRECT`。AI、国外流媒体和 Bilibili 也不提供 `DIRECT` 成员。
 
 ### Rule
 
-规则采用 Surge 原生自上而下、首次命中生效的顺序模型。当前结构包括：
+规则遵循 Surge 自上而下、首次命中生效的模型：
 
-- LAN / System
-- AI / Apple Intelligence
-- Apple
-- 国际流媒体
-- Bilibili
-- 中国大陆域名 / IP
-- 唯一最终 `FINAL,🌐 兜底策略,dns-failed`
+- LAN
+- AI 与 Apple Intelligence 特例
+- SYSTEM 与 Apple 服务
+- 国外流媒体
+- Bilibili 独立策略
+- 中国大陆域名
+- 带 `no-resolve` 的 IP 规则和 GEOIP
+- 唯一且最后的 `FINAL,🌐 兜底策略,dns-failed`
 
-## 安全边界
+明确的窄规则优先处理已知冲突，例如 `api.github.com` 不随上游 AI 聚合规则进入 AI，Bilibili 也先于国内聚合规则命中独立策略。
 
-这个仓库必须始终保持公开安全：
+## 确定性验证
 
-- 不提交真实 `[Proxy]` 节点
-- 不提交机场订阅 URL
-- 不提交 `password` / `username` / private key / Token
-- 不在公开模板写入私人 `#!MANAGED-CONFIG` 地址
-- 不加入 MITM、Rewrite 或 Script 资产
-
-私人节点只在 Beatrice Sub 的运行时生成结果中出现。
-
-## 自动校验
-
-仓库提供零依赖静态检查：
+Required CI 只读取当前仓库和当前 commit，不 checkout 其他仓库，也不实时下载外部 RULE-SET：
 
 ```bash
 node scripts/validate-config.mjs
 ```
 
-GitHub Actions 会在 push 和 pull request 时自动执行同一套门禁。校验覆盖：
+硬性门禁包括：
 
-- 公开模板只有 `[General]` / `[Proxy Group]` / `[Rule]`
-- `[Proxy]` 不得进入公开仓库
-- General 冻结基线
-- 6 个业务 / 全局 `select` + 5 个地区人工 `select` + 5 个隐藏自动 helper
-- 只有 `🚀 手动切换` 与地区层直接导入真实节点；AI / 国外流媒体 / Bilibili / Apple / Final 禁止重新铺开全部节点
-- 策略引用图、未定义 policy 与循环引用
-- 地区 regex 正向 / 反向 / 对抗边界样例
-- 动态 0 节点、部分地区、单地区、重名去重与 100 节点场景
-- AI / 国外流媒体 / Bilibili / 手动 / 地区链路不得出现隐式 DIRECT
-- Bilibili 必须保持独立策略目标
-- 规则策略引用、顺序、`no-resolve`、FINAL 与规则语义摘要
-- 正向验证与故意破坏配置的负向 fixtures
-- 无重复规则、无 `MATCH`
-- 外部 RULE-SET 必须使用 HTTPS
-- 无常见代理凭据或节点声明
+- section、General key、policy group 和 group parameter 不得重复
+- 引号、引号内逗号、受支持转义、行内注释和空组件的语法检查
+- General 网络行为契约
+- policy 引用、未定义成员、循环和 FINAL 位置
+- 地区人工选择、helper 的 zero-node fail-closed 安全性
+- service group 不得直接铺开 raw proxies 或意外加入 `DIRECT`
+- IP-bound rules 的 `no-resolve`
+- 公开 URL allowlist、具体节点与常见凭据泄漏检测
+- 地区 regex 正反例，以及 0 / 部分 / 全地区 / 重名 / 125 节点场景
+- 20 个高价值 hostname 的 first-match 路由矩阵
+- 17 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
 
-如果未来因为 Surge 官方语义变化或真实需求需要修改已冻结行为，应在同一个 commit 中同步更新配置、校验器和说明，避免“配置已经变了但仓库契约仍停留在旧版本”。
+规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
 
-## 相关项目
+## 外部漂移审计
 
-- [Beatrice-Surge-Modules](https://github.com/BeatriceArchive/Beatrice-Surge-Modules) — 独立 Surge 模块与脚本
-- Beatrice Sub — 私人节点、订阅与运行时模板注入层
+`Audit External Rule Drift` 每周运行一次，也支持手动触发：
+
+```bash
+node scripts/audit-external-rules.mjs
+```
+
+它检查当前 7 个外部 RULE-SET 的可达性、非空、语法类型、合理规模、IP-only 规则族和少量关键契约。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常或关键语义丢失才失败。
+
+外部网络检查刻意不进入 required CI，因此同一仓库 commit 的主要验证不会随上游 mutable 内容或临时网络故障随机变化。
+
+## 维护流程
+
+修改配置时同步更新对应语义断言：
+
+1. 运行 `node scripts/validate-config.mjs`。
+2. 若修改外部 RULE-SET 依赖，再运行 `node scripts/audit-external-rules.mjs`。
+3. 检查完整 diff 与 `git diff --check`。
+4. 确认远端 `main` 未前移后再 fast-forward push；不 force push。
+
+不要求每次规则变化更新整份 corpus hash，也不因普通上游 fingerprint 漂移修改仓库。
 
 ## 配置文件
 
