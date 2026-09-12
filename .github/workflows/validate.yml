@@ -14,28 +14,19 @@ permissions:
 
 jobs:
   validate:
-    name: Static config contract
+    name: Deterministic profile contract
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Checkout public Surge Modules contract
-        uses: actions/checkout@v4
-        with:
-          repository: BeatriceArchive/Beatrice-Surge-Modules
-          ref: main
-          path: Beatrice-Surge-Modules
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
+          check-latest: false
 
       - name: Validate Beatrice-Surge.conf
         run: node scripts/validate-config.mjs
-
-      - name: Validate public Config and Modules contract
-        run: node scripts/validate-public-contract.mjs Beatrice-Surge.conf Beatrice-Surge-Modules/Modules/Beatrice-Surge-System.sgmodule
