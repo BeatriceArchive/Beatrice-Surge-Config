@@ -3,111 +3,141 @@
 [![Validate Surge Config](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/validate.yml/badge.svg)](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/validate.yml)
 [![Audit External Rule Drift](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/external-drift.yml/badge.svg)](https://github.com/BeatriceArchive/Beatrice-Surge-Config/actions/workflows/external-drift.yml)
 
-Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`、`[Proxy Group]` 和 `[Rule]`，不保存真实代理节点、订阅地址或凭据。
+Beatrice 的公开 Surge iOS Profile 模板。仓库只维护可公开、可验证的网络基线、策略组和路由规则；真实代理节点、订阅地址与凭据始终位于私人订阅层。
 
-## 架构与边界
+> 维护原则：稳定优先、最小改动、真实设备证据优先。成熟配置默认进入维护模式，不为了“多功能”持续增加复杂度。
 
-`Beatrice-Surge.conf` 故意不包含 `[Proxy]`。运行时由私人订阅层只注入代理节点；公开模板继续决定网络基线、策略组和路由规则。
+## 与另外两个仓库的关系
 
-公开仓库禁止出现：
+- **Beatrice-Surge-Config**：定义 Surge 的 `[General]`、`[Proxy Group]` 与 `[Rule]`。
+- **Beatrice-Sub**：私人订阅工作台；生成 Surge 输出时只向模板注入 `[Proxy]` 与必要的 WireGuard section，不应重写本仓库的 General、策略组或规则。
+- **Beatrice-Surge-Modules**：独立的 Surge 模块仓库；提供系统覆盖、基础面板和 Bilibili 自动化，不承担代理节点存储职责。
 
-- 真实代理节点和 `[Proxy]`
-- 机场订阅、私人 managed profile URL
+三者可以协同使用，但安全边界彼此独立。
+
+## 公开边界
+
+`Beatrice-Surge.conf` 故意不保存 `[Proxy]`。
+
+本仓库禁止出现：
+
+- 真实代理节点或私人 `[Proxy]`
+- 机场订阅、私人 Managed Profile URL
 - password、username、private key、Token 等凭据
 - MITM、Rewrite 或 Script 资产
 
-配置中的活动 URL 采用小型 allowlist：当前只接受明确的规则源、图标源和代理测试端点。注释也会被完整扫描，只允许无凭据、无查询参数的已知公共文档/源码 host，避免旧订阅 URL 藏在禁用文本中；README 中的普通文档链接不参与此门禁。
+配置中的活动 URL 使用小型 allowlist。Validator 同时扫描注释中的 URL，避免旧订阅或凭据被“注释掉以后继续留在公开仓库”。
 
-## 配置模型
+## 当前配置模型
 
 ### General
 
-- System DNS；代理目标默认保持远端解析语义
+当前基线包括：
+
+- `dns-server = system`
 - Surge iOS VIF-only：`compatibility-mode = 3`
-- IPv6 关闭
-- Wi-Fi / 热点共享关闭
-- 按既定范围接管全网络
-- 不支持 UDP 的策略直接拒绝，避免静默直连
-- ICMP forwarding 关闭
-- `http://www.gstatic.com/generate_204` 作为显式代理可用性测试端点；`test-timeout = 5`
+- IPv6 关闭：`ipv6 = false`、`ipv6-vif = disabled`
+- Wi-Fi / 热点代理共享关闭
+- `include-all-networks = true`
+- `include-local-networks = false`
+- `include-apns = false`
+- `include-cellular-services = false`
+- 不支持 UDP 的策略直接 `reject`，避免静默直连
+- `exclude-simple-hostnames = true`
+- `proxy-restricted-to-lan = true`
+- `icmp-forwarding = false`
+- `loglevel = notify`
+- `http://www.gstatic.com/generate_204` 作为显式代理可用性测试端点，`test-timeout = 5`
+
+### Bilibili raw-TCP 真机 A/B
+
+当前 `main` 含一个**范围受限的真实设备 A/B 候选**：仅对已观察到的 Bilibili HTTPS 媒体域名设置 `always-raw-tcp-hosts`，用于比较绕过协议嗅探后的视频播放体验。
+
+它不是对根因的永久结论，也不是全局 raw-TCP 开关。只有真实 iPhone 使用收益成立时才值得长期保留；若收益不成立，应按单变量实验原则精确回滚。
 
 ### Proxy Group
 
-策略分三层：
+用户可见策略分两层：
 
-1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`、`🍎 Apple`。手动入口导入全部真实节点；AI、流媒体和 Apple 通过六个地区与手动入口复用节点，不重复展开 raw proxies。Apple 首选项固定为 `DIRECT`，需要时可手动切换六区或全局手动节点；该选择覆盖主要 Apple 用户服务和主要 Apple CDN/static assets，不宣称覆盖所有 Apple 或共享 CDN 流量。
-2. 地区人工层：香港、日本、新加坡、美国、台湾、韩国。每组默认使用自动 helper，也能持久固定真实地区节点。
-3. 地区自动层：隐藏的 `fallback` helper。每个 helper 都把 `REJECT` 作为首个显式成员，再按地区 regex 导入运行时节点。
+1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`、`🍎 Apple`。
+2. 地区人工层：香港、日本、新加坡、美国、台湾、韩国。
 
-当前用户可见策略组共 10 个：四个业务/全局组和六个地区组。六个 `⚡ 地区自动` helper 均使用 `hidden=true`。
+每个地区组默认指向一个隐藏 `fallback` helper，同时允许手动固定真实节点。六个 helper 都以 `REJECT` 作为显式安全成员，再按地区 regex 导入运行时节点。
 
-当某地区没有节点时，helper 仍有 `REJECT`，不会成为空组并触发 `SUBSTITUTE → DIRECT`。AI 和流媒体不提供 `DIRECT` 成员；英国、德国、加拿大等长尾地区节点仍可从 `🚀 手动选择` 访问。
+因此：
+
+- 当前用户可见策略组共 **10 个**：4 个业务/全局组 + 6 个地区组。
+- 六个 `⚡ 地区自动` helper 均为 `hidden=true`。
+- 某地区零节点时保持 fail-closed，不会形成空组后 `SUBSTITUTE → DIRECT`。
+- `🤖 AI` 与 `🌍 流媒体` 不提供 `DIRECT` 成员。
+- `🍎 Apple` 默认首选 `DIRECT`，但可手动切换地区或全局手动节点。
+- 长尾地区节点仍可通过 `🚀 手动选择` 访问。
 
 ### Rule
 
-规则遵循 Surge 自上而下、首次命中生效的模型：
+规则按 Surge 自上而下、首次命中生效：
 
-- LAN
-- AI 与 Apple Intelligence 特例
-- SYSTEM、Apple 中国服务与可切换的 Apple 通用服务
-- 国际流媒体
-- 跟随 `🚀 手动选择` 的 Bilibili corpus
-- 中国大陆域名
-- 带 `no-resolve` 的 IP 规则和 GEOIP
-- 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
+1. LAN
+2. AI 与 Apple Intelligence 特例
+3. SYSTEM、Apple 中国服务与可切换的 Apple 通用服务 / CDN
+4. 国际流媒体
+5. Bilibili corpus，跟随 `🚀 手动选择`
+6. 中国大陆域名
+7. 带 `no-resolve` 的 IP 规则与 GEOIP
+8. 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
-明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM 与 Apple 中国服务保持 DIRECT，`apple_services.conf` 与 SKK `domainset/apple_cdn.conf` 进入默认 DIRECT 的 `🍎 Apple`。真机确认但 upstream 尚未覆盖的 `afs.ampaeservices.com` 使用精确本地规则，不扩大为整个 suffix；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
+窄规则优先处理已知冲突：`api.github.com` 不进入 AI 聚合规则；Apple Intelligence 高于 SYSTEM；Apple 中国服务保持 DIRECT；通用 Apple 服务与主要 CDN 进入默认 DIRECT 的 `🍎 Apple`；Bilibili 在国内聚合规则之前命中。
 
 ## 确定性验证
 
-Required CI 只读取当前仓库和当前 commit，不 checkout 其他仓库，也不实时下载外部 RULE-SET：
+Required CI 只依赖当前仓库与当前 commit，不实时下载外部 RULE-SET：
 
 ```bash
 node scripts/validate-config.mjs
 ```
 
-硬性门禁包括：
+主要门禁覆盖：
 
-- section、General key、policy group 和 group parameter 不得重复
-- 单/双引号、引号内逗号、受支持转义、quote-aware 行内注释和空组件的语法检查
+- section、General key、policy group 与 group parameter 去重
+- 引号、转义、行内注释、空组件等语法边界
 - General 网络行为契约
-- policy 引用、`include-other-group` 递归依赖、未定义成员、循环和 FINAL 位置
-- Surge `AND` / `OR` / `NOT` 的窄而完整结构验证；公开产品边界继续显式拒绝 `SCRIPT`
-- 十个必需可见组、六组地区人工选择及 helper 的 zero-node fail-closed 安全性
-- service group 不得直接铺开 raw proxies；AI/流媒体不得加入 `DIRECT`，Apple 必须以 `DIRECT` 为首成员
+- policy 引用、`include-other-group` 递归依赖、循环与 FINAL 位置
+- `AND` / `OR` / `NOT` 的受支持结构
+- 10 个可见组与 6 个地区 helper 的零节点安全性
+- service group 不直接铺开 raw proxies
+- AI / 流媒体不得加入 `DIRECT`；Apple 必须以 `DIRECT` 为首成员
 - IP-bound rules 的 `no-resolve`
-- 活动 URL allowlist、全配置（含注释）公共 URL 门禁、具体节点与常见凭据泄漏检测
-- 精度优先的地区 regex（美国支持 `USA` 且排除 `South America`、`USAID`、`USDT` 等），以及零节点、单区、部分六区、完整六区、纯长尾、混合、重名和 126 节点场景
-- 29 个高价值 hostname 的 first-match 路由矩阵，覆盖 Apple Intelligence、SYSTEM、Apple 中国、Apple 通用服务与 Apple CDN 的优先级
-- 44 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
-- 合法演进 fixture：新增合法业务组、`include-other-group`、logical rule、公共文档注释和图标变化不会被文本快照误杀
+- 活动 URL allowlist、注释 URL、安全凭据与节点泄漏检测
+- 地区 regex 的正向 / 负向场景
+- 高价值 hostname 的 first-match 路由矩阵
+- 负向 fixture 与合法演进 fixture
 
-规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
+Validator 验证的是**语义契约**，不是完整文本 hash；合法注释、图标和规则演进不需要人为更新整份快照。
 
-## 外部漂移审计
+## 外部规则漂移
 
-`Audit External Rule Drift` 每周运行一次，也支持手动触发：
+外部网络审计与 Required CI 分离：
 
 ```bash
 node scripts/audit-external-rules.mjs
 ```
 
-它检查当前 8 个外部规则资源（7 个 `RULE-SET`、1 个 `DOMAIN-SET`）的可达性、非空、格式、合理规模、IP-only 规则族和少量关键契约，并用实时下载的完整上游内容模拟当前 profile 的 first-match 路由。28 个关键 hostname 用来发现 AI、Apple 服务/CDN、流媒体、Bilibili、国内与 FINAL 之间的真实捕获冲突。每次打印内容 fingerprint 便于追踪；单纯 fingerprint 变化不会失败，只有无法获取、格式/规模异常、关键契约丢失或最终路由语义改变才失败。
+`Audit External Rule Drift` 每周执行，也支持手动触发。它实时读取当前外部规则资源，检查可达性、格式、规模、关键契约与 first-match 路由结果。
 
-外部网络检查刻意不进入 required CI，因此同一仓库 commit 的主要验证不会随上游 mutable 内容或临时网络故障随机变化。
+普通 fingerprint 变化本身不会失败；只有资源不可用、结构异常、关键契约消失或最终路由语义发生破坏性变化才失败。
 
 ## 维护流程
 
-修改配置时同步更新对应语义断言：
+修改 Profile 时：
 
-1. 运行 `node scripts/validate-config.mjs`。
-2. 若修改外部 RULE-SET 依赖，再运行 `node scripts/audit-external-rules.mjs`。
-3. 检查完整 diff 与 `git diff --check`。
-4. 确认远端 `main` 未前移后再 fast-forward push；不 force push。
+1. 只改有明确收益的行为。
+2. 运行 `node scripts/validate-config.mjs`。
+3. 涉及外部规则依赖时再运行 `node scripts/audit-external-rules.mjs`。
+4. 检查完整 diff 与 `git diff --check`。
+5. push 前确认远端 `main` 未发生意外前移；不 force push。
+6. CI 通过后，如变更影响真实网络体验，再以 iPhone / Surge 真机结果作为最终证据。
 
-不要求每次规则变化更新整份 corpus hash，也不因普通上游 fingerprint 漂移修改仓库。
-
-## 配置文件
+## 文件与安装
 
 - [`Beatrice-Surge.conf`](./Beatrice-Surge.conf)
-- [Raw](https://raw.githubusercontent.com/BeatriceArchive/Beatrice-Surge-Config/main/Beatrice-Surge.conf)
+- [Raw Profile](https://raw.githubusercontent.com/BeatriceArchive/Beatrice-Surge-Config/main/Beatrice-Surge.conf)
