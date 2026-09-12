@@ -35,11 +35,13 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 
 策略分三层：
 
-1. 业务 / 全局层：手动、AI、国外流媒体、Bilibili、Apple 和 Final。除全局手动入口外，业务组不重复导入全部真实节点。
-2. 地区人工层：香港、日本、新加坡、美国、台湾。每组默认使用自动 helper，也能持久固定真实地区节点。
+1. 业务 / 全局层：`🚀 手动选择`、`🤖 AI`、`🌍 流媒体`。手动入口导入全部真实节点；AI 和流媒体完整引用六个地区与手动入口，不重复展开 raw proxies。
+2. 地区人工层：香港、日本、新加坡、美国、台湾、韩国。每组默认使用自动 helper，也能持久固定真实地区节点。
 3. 地区自动层：隐藏的 `fallback` helper。每个 helper 都把 `REJECT` 作为首个显式成员，再按地区 regex 导入运行时节点。
 
-当某地区没有节点时，helper 仍有 `REJECT`，不会成为空组并触发 `SUBSTITUTE → DIRECT`。AI、国外流媒体和 Bilibili 也不提供 `DIRECT` 成员。
+当前用户可见策略组共 9 个：三个高频业务组和六个地区组。六个 `⚡ 地区自动` helper 均使用 `hidden=true`。
+
+当某地区没有节点时，helper 仍有 `REJECT`，不会成为空组并触发 `SUBSTITUTE → DIRECT`。AI 和流媒体不提供 `DIRECT` 成员；英国、德国、加拿大等长尾地区节点仍可从 `🚀 手动选择` 访问。
 
 ### Rule
 
@@ -47,14 +49,14 @@ Beatrice 的公开 Surge iOS 配置壳。仓库保存经过验证的 `[General]`
 
 - LAN
 - AI 与 Apple Intelligence 特例
-- SYSTEM 与 Apple 服务
-- 国外流媒体
-- Bilibili 独立策略
+- SYSTEM 与其他保持 DIRECT 的 Apple 服务
+- 国际流媒体
+- 跟随 `🚀 手动选择` 的 Bilibili corpus
 - 中国大陆域名
 - 带 `no-resolve` 的 IP 规则和 GEOIP
-- 唯一且最后的 `FINAL,🌐 兜底策略,dns-failed`
+- 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
-明确的窄规则优先处理已知冲突，例如 `api.github.com` 不随上游 AI 聚合规则进入 AI，Bilibili 也先于国内聚合规则命中独立策略。
+明确的窄规则优先处理已知冲突：`api.github.com` 不随上游 AI 聚合规则进入 AI；Apple Intelligence 进入 `🤖 AI`，SYSTEM、Apple 中国服务与其他 Apple 服务保持 DIRECT；Bilibili 在国内聚合规则之前命中并跟随全局手动选择。
 
 ## 确定性验证
 
@@ -70,13 +72,14 @@ node scripts/validate-config.mjs
 - 引号、引号内逗号、受支持转义、行内注释和空组件的语法检查
 - General 网络行为契约
 - policy 引用、未定义成员、循环和 FINAL 位置
-- 地区人工选择、helper 的 zero-node fail-closed 安全性
+- 九个必需可见组、六组地区人工选择及 helper 的 zero-node fail-closed 安全性
 - service group 不得直接铺开 raw proxies 或意外加入 `DIRECT`
 - IP-bound rules 的 `no-resolve`
 - 公开 URL allowlist、具体节点与常见凭据泄漏检测
-- 地区 regex 正反例，以及 0 / 部分 / 全地区 / 重名 / 125 节点场景
+- 地区 regex 正反例，以及零节点、单区、部分六区、完整六区、纯长尾、混合、重名和 126 节点场景
 - 20 个高价值 hostname 的 first-match 路由矩阵
-- 22 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
+- 26 个负向 fixture；只有 validator 正常以预期 validation failure 退出才算成功拒绝
+- 合法演进 fixture：新增合法业务组、规则和非关键注释不会被文本快照误杀
 
 规则数量、注释、图标和完整 `[Rule]` 文本不做 SHA256 冻结。合法演进只需继续满足语义契约和冲突测试。
 

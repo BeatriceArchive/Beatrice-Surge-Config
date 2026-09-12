@@ -402,6 +402,7 @@ try {
 
 if (!errors.length && process.env.SKIP_LEGAL_FIXTURE !== '1') {
   const legal = text
+    .replace('/Icon/Global.png', '/Icon/Final.png')
     .replace('[Rule]', '🧪 合法扩展 = select, 🚀 手动选择, hidden=true\n\n[Rule]')
     .replace('# Final\n', '# A non-critical comment may evolve.\nDOMAIN-SUFFIX,legal-evolution.example,🧪 合法扩展,extended-matching\n\n# Final\n');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-legal-'));
@@ -416,6 +417,7 @@ if (!errors.length && process.env.SKIP_LEGAL_FIXTURE !== '1') {
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
+let negativeFixtureCount = 0;
 if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
   const fixtures = [
     ['duplicate section', source => `${source}\n[Rule]\nFINAL,DIRECT\n`],
@@ -445,6 +447,7 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
     ['FINAL not last', source => source.replace('FINAL,🚀 手动选择,dns-failed', 'FINAL,🚀 手动选择,dns-failed\nDOMAIN,after-final.example,DIRECT')]
   ];
+  negativeFixtureCount = fixtures.length;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-validator-'));
   try {
     for (const [index, [name, mutate]] of fixtures.entries()) {
@@ -477,5 +480,5 @@ console.log(`- Regional selectors/helpers: ${REGIONS.length}`);
 console.log(`- Dynamic node scenarios: ${scenarios.length}`);
 console.log('- Parser/tokenizer, policy graph, regex, rules, public safety: PASS');
 console.log(`- Known-host first-match routes: ${routeMatrix.size}`);
-console.log(`- Negative fixtures rejected normally: ${25}`);
+console.log(`- Negative fixtures rejected normally: ${negativeFixtureCount}`);
 console.log('- Legal evolution fixture accepted: PASS');
