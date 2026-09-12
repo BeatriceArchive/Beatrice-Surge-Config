@@ -20,13 +20,14 @@ const REQUIRED_GENERAL = new Map([
   ['exclude-simple-hostnames', 'true'], ['icmp-forwarding', 'false'], ['loglevel', 'notify']
 ]);
 const MANUAL = '🚀 手动选择';
-const SERVICES = ['🤖 AI', '🌍 流媒体'];
+const APPLE = '🍎 Apple';
+const SERVICES = ['🤖 AI', '🌍 流媒体', APPLE];
 const REMOVED_GROUPS = ['📺 哔哩哔哩', '🍎 苹果服务', '🌐 兜底策略', '🚀 手动切换', '🤖 AI服务', '🌍 国外流媒体'];
 const REGIONS = [
   ['🇭🇰 香港节点', '⚡ 香港自动', '(?i)(🇭🇰|香港|Hong Kong|(^|[- _/|()])港($|[- _/|()0-9])|(^|[^A-Za-z])HK([^A-Za-z]|$))', ['香港 01', 'HK-01', 'HK01', 'Hong Kong', '🇭🇰', 'VIP-港-01', ' hk-01 ', 'HK-01_1', 'HK-01=Premium'], ['VIP-港口中转', 'HKG 01', 'BANKHK']],
   ['🇯🇵 日本节点', '⚡ 日本自动', '(?i)(🇯🇵|日本|Japan|(^|[- _/|()])日($|[- _/|()0-9])|(^|[^A-Za-z])JP([^A-Za-z]|$))', ['日本 01', 'JP-01', 'JP01', 'Japan', '🇯🇵', 'VIP-日-01', 'jp-01', 'JP-01_1', 'JP-01=Premium'], ['VIP-日常节点', 'JPG 01', 'JPN 01']],
   ['🇸🇬 新加坡节点', '⚡ 新加坡自动', '(?i)(🇸🇬|新加坡|狮城|Singapore|(^|[- _/|()])新($|[- _/|()0-9])|(^|[^A-Za-z])SG([^A-Za-z]|$))', ['新加坡 01', 'SG-01', 'SG01', 'Singapore', '🇸🇬', 'VIP-新-01', 'sg-01', 'SG-01_1', 'SG-01=Premium'], ['VIP-新节点', 'SGP 01', 'ASGARD 01']],
-  ['🇺🇸 美国节点', '⚡ 美国自动', '(?i)(🇺🇸|美国|美國|United States|America|(^|[- _/|()])美($|[- _/|()0-9])|(^|[^A-Za-z])US([^A-Za-z]|$))', ['美国 01', 'US-01', 'US01', 'America', '🇺🇸', 'VIP-美-01', 'us-01', 'US-01_1', 'US-01=Premium'], ['VIP-美化线路', 'USA 01', 'RUS 01', 'USDT 01']],
+  ['🇺🇸 美国节点', '⚡ 美国自动', '(?i)(🇺🇸|美国|美國|United States|(^|[- _/|()])美($|[- _/|()0-9])|(^|[^A-Za-z])(US|USA)([^A-Za-z]|$))', ['美国 01', '美國 01', 'US-01', 'US01', 'USA 01', 'USA-01', 'United States', '🇺🇸', 'VIP-美-01', 'us-01', 'US-01_1', 'US-01=Premium', 'USA-01=Premium'], ['South America', 'Central America', 'Latin America', 'American Samoa', 'USAID', 'USDT 01', 'RUS 01', 'RUSA 01', 'AUSA 01', 'VIP-美化线路']],
   ['🇹🇼 台湾节点', '⚡ 台湾自动', '(?i)(🇹🇼|台湾|台灣|Taiwan|(^|[- _/|()])台($|[- _/|()0-9])|(^|[^A-Za-z])TW([^A-Za-z]|$))', ['台湾 01', 'TW-01', 'TW01', 'Taiwan', '🇹🇼', 'VIP-台-01', 'tw-01', 'TW-01_1', 'TW-01=Premium'], ['VIP-台式出口', 'TWN 01', 'TWITTER 01']],
   ['🇰🇷 韩国节点', '⚡ 韩国自动', '(?i)(🇰🇷|韩国|韓國|(^|[^A-Za-z])((South )?Korea|KR)([^A-Za-z]|$)|(^|[- _/|()])韩($|[- _/|()0-9])|(^|[- _/|()])韓($|[- _/|()0-9]))', ['韩国 01', '韓國 01', 'KR-01', 'KR01', 'Korea', 'South Korea', '🇰🇷', 'VIP-韩-01', 'VIP-韓-01', 'kr-01', 'KR-01_1', 'KR-01=Premium'], ['KRAKEN', 'KRW 01', 'KOREAN text', 'South Korean', 'ICN 01', 'SEL 01', 'SEOUL 01']]
 ];
@@ -239,7 +240,8 @@ for (const region of REGIONAL) if (!manual?.members.includes(region)) fail(`${MA
 
 const serviceMembers = new Map([
   ['🤖 AI', ['🇺🇸 美国节点', ...REGIONAL.filter(name => name !== '🇺🇸 美国节点'), MANUAL]],
-  ['🌍 流媒体', [...REGIONAL, MANUAL]]
+  ['🌍 流媒体', [...REGIONAL, MANUAL]],
+  [APPLE, ['DIRECT', ...REGIONAL, MANUAL]]
 ]);
 for (const [name, required] of serviceMembers) {
   const group = groups.get(name);
@@ -249,7 +251,8 @@ for (const [name, required] of serviceMembers) {
 }
 if (groups.get('🤖 AI')?.members[0] !== '🇺🇸 美国节点') fail('🤖 AI must default to 🇺🇸 美国节点');
 if (groups.get('🌍 流媒体')?.members[0] !== '🇭🇰 香港节点') fail('🌍 流媒体 must default to 🇭🇰 香港节点');
-for (const name of SERVICES) if (groups.get(name)?.members.includes('DIRECT')) fail(`${name} must not allow DIRECT`);
+if (groups.get(APPLE)?.members[0] !== 'DIRECT') fail(`${APPLE} must default to DIRECT`);
+for (const name of ['🤖 AI', '🌍 流媒体']) if (groups.get(name)?.members.includes('DIRECT')) fail(`${name} must not allow DIRECT`);
 
 for (const [manualName, helperName, regex, positive, negative] of REGIONS) {
   const regional = groups.get(manualName);
@@ -296,7 +299,7 @@ subsequence(rules, [
   /^DOMAIN,api\.github\.com,🚀 手动选择(?:,|$)/,
   /apple_intelligence\.conf,🤖 AI(?:,|$)/,
   /^RULE-SET,SYSTEM,DIRECT(?:,|$)/,
-  /apple_services\.conf,DIRECT(?:,|$)/,
+  /apple_services\.conf,🍎 Apple(?:,|$)/,
   /^DOMAIN-SUFFIX,youtube\.com,🌍 流媒体(?:,|$)/,
   /^DOMAIN-SUFFIX,b23\.tv,🚀 手动选择(?:,|$)/,
   /^DOMAIN-SUFFIX,cn,DIRECT(?:,|$)/,
@@ -312,13 +315,14 @@ const appleIntelligenceRule = rules.find(rule => rule.fields[1]?.endsWith('/appl
 const appleCnRule = rules.find(rule => rule.fields[1]?.endsWith('/apple_cn.conf'));
 const appleServicesRule = rules.find(rule => rule.fields[1]?.endsWith('/apple_services.conf'));
 if (appleIntelligenceRule?.policy !== '🤖 AI') fail('Apple Intelligence must use 🤖 AI');
-if (appleCnRule?.policy !== 'DIRECT' || appleServicesRule?.policy !== 'DIRECT') fail('non-AI Apple rule families must remain DIRECT');
+if (appleCnRule?.policy !== 'DIRECT') fail('Apple China services must remain DIRECT');
+if (appleServicesRule?.policy !== APPLE) fail(`general Apple services must use ${APPLE}`);
 
 const remoteHostContracts = new Map([
   ['https://ruleset.skk.moe/List/non_ip/apple_intelligence.conf', new Set(['apple-relay.apple.com', 'gspe1-ssl.ls.apple.com'])],
   ['https://ruleset.skk.moe/List/non_ip/ai.conf', new Set(['chatgpt.com', 'claude.ai', 'gemini.google', 'api.github.com'])],
   ['https://ruleset.skk.moe/List/non_ip/apple_cn.conf', new Set(['cn.apple.com'])],
-  ['https://ruleset.skk.moe/List/non_ip/apple_services.conf', new Set(['music.apple.com'])],
+  ['https://ruleset.skk.moe/List/non_ip/apple_services.conf', new Set(['music.apple.com', 'icloud.com', 'appstore.com'])],
   ['https://ruleset.skk.moe/List/non_ip/domestic.conf', new Set(['baidu.com', 'b23.tv', 'bilibili.com'])]
 ]);
 const systemHosts = new Set(['ls.apple.com']);
@@ -342,7 +346,8 @@ function routeHost(host) {
 const routeMatrix = new Map([
   ['chatgpt.com', '🤖 AI'], ['claude.ai', '🤖 AI'], ['gemini.google', '🤖 AI'],
   ['deepseek.com', '🤖 AI'], ['apple-relay.apple.com', '🤖 AI'], ['gspe1-ssl.ls.apple.com', '🤖 AI'],
-  ['api.github.com', MANUAL], ['ls.apple.com', 'DIRECT'], ['music.apple.com', 'DIRECT'],
+  ['api.github.com', MANUAL], ['ls.apple.com', 'DIRECT'], ['cn.apple.com', 'DIRECT'],
+  ['music.apple.com', APPLE], ['icloud.com', APPLE], ['appstore.com', APPLE],
   ['youtube.com', '🌍 流媒体'], ['netflix.com', '🌍 流媒体'], ['disneyplus.com', '🌍 流媒体'],
   ['spotify.com', '🌍 流媒体'], ['tiktok.com', '🌍 流媒体'], ['primevideo.com', '🌍 流媒体'],
   ['bilibili.com', MANUAL], ['b23.tv', MANUAL], ['baidu.com', 'DIRECT'],
@@ -377,7 +382,7 @@ const scenarios = [
   { name: 'mixed', nodes: ['香港 01', '日本 01', '新加坡 01', '美国 01', '台湾 01', '韩国 01', 'UK-01', 'Unclassified 01'], matched: REGIONAL },
   { name: 'duplicate names', nodes: ['US-01', 'US-01_1', '香港 01', '香港 01_1'], matched: ['🇭🇰 香港节点', '🇺🇸 美国节点'] },
   { name: 'equals suffix', nodes: ['HK-01=Premium', 'JP-01=Premium', 'SG-01=Premium', 'US-01=Premium', 'TW-01=Premium', 'KR-01=Premium'], matched: REGIONAL },
-  { name: 'adversarial names', nodes: ['VIP-港口中转', 'VIP-日常节点', 'VIP-新节点', 'VIP-美化线路', 'VIP-台式出口', 'KRAKEN', 'KRW 01', 'KOREAN text'], matched: [] },
+  { name: 'adversarial names', nodes: ['VIP-港口中转', 'VIP-日常节点', 'VIP-新节点', 'VIP-美化线路', 'South America', 'Central America', 'Latin America', 'American Samoa', 'USAID', 'USDT 01', 'RUS 01', 'RUSA 01', 'AUSA 01', 'VIP-台式出口', 'KRAKEN', 'KRW 01', 'KOREAN text'], matched: [] },
   { name: '126 nodes', nodes: Array.from({ length: 126 }, (_, i) => `${['HK', 'JP', 'SG', 'US', 'TW', 'KR'][i % 6]}-${String(i + 1).padStart(3, '0')}`), matched: REGIONAL }
 ];
 for (const scenario of scenarios) {
@@ -429,6 +434,10 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['unknown group parameter', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, REJECT, hiddden=true,')],
     ['duplicate group', source => source.replace('[Rule]', `${active(sec.get('Proxy Group'))[0]}\n[Rule]`)],
     ['service raw-node flood', source => source.replace(/(🤖 AI = select,[^\n]*?)(, icon-url=)/, '$1, include-all-proxies=true$2')],
+    ['Apple missing', source => source.replace(/^🍎 Apple = .*\n/m, '')],
+    ['Apple defaults to proxy', source => source.replace('🍎 Apple = select, DIRECT,', '🍎 Apple = select, 🇭🇰 香港节点, DIRECT,')],
+    ['Apple loses a region', source => source.replace('🍎 Apple = select, DIRECT, 🇭🇰 香港节点,', '🍎 Apple = select, DIRECT,')],
+    ['Apple raw-node flood', source => source.replace(/(🍎 Apple = select,[^\n]*?)(, icon-url=)/, '$1, include-all-proxies=true$2')],
     ['manual loses raw import', source => source.replace(', include-all-proxies=true, icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png', ', icon-url=https://raw.githubusercontent.com/Aioneas/Surge/main/Icon/Global.png')],
     ['helper loses REJECT', source => source.replace('⚡ 美国自动 = fallback, REJECT,', '⚡ 美国自动 = fallback, DIRECT,')],
     ['region hidden', source => source.replace('🇺🇸 美国节点 = select, ⚡ 美国自动,', '🇺🇸 美国节点 = select, ⚡ 美国自动, hidden=true,')],
@@ -439,7 +448,8 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['General changed', source => source.replace('ipv6 = false', 'ipv6 = true')],
     ['GitHub captured by AI', source => source.replace('DOMAIN,api.github.com,🚀 手动选择,extended-matching', 'DOMAIN,api.github.com,🤖 AI,extended-matching')],
     ['Bilibili captured as domestic', source => source.replace('DOMAIN-SUFFIX,b23.tv,🚀 手动选择,extended-matching', 'DOMAIN-SUFFIX,b23.tv,DIRECT,extended-matching')],
-    ['Apple services captured by manual', source => source.replace('apple_services.conf,DIRECT,no-resolve', 'apple_services.conf,🚀 手动选择,no-resolve')],
+    ['Apple services bypass selector', source => source.replace('apple_services.conf,🍎 Apple,no-resolve', 'apple_services.conf,DIRECT,no-resolve')],
+    ['Apple Intelligence captured by Apple', source => source.replace('apple_intelligence.conf,🤖 AI,extended-matching', 'apple_intelligence.conf,🍎 Apple,extended-matching')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
     ['unknown rule type', source => source.replace('DOMAIN-SUFFIX,youtube.com', 'DOMAIN-SUFIX,youtube.com')],
     ['unknown rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matcing')],
