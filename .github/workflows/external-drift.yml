@@ -1,0 +1,31 @@
+name: Audit External Rule Drift
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: External RULE-SET contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          check-latest: false
+
+      - name: Validate local profile first
+        run: node scripts/validate-config.mjs
+
+      - name: Audit external RULE-SET drift
+        run: node scripts/audit-external-rules.mjs

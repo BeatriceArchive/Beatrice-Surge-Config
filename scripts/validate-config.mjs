@@ -280,6 +280,16 @@ for (const rule of bilibili) if (rule.policy !== '📺 哔哩哔哩') fail(`Bili
 if (/^\s*#!MANAGED-CONFIG\b/im.test(text)) fail('public shell must not contain managed-config');
 if (/^\s*[^#\[\n]+\s*=\s*(ss|vmess|trojan|snell|tuic|hysteria2|anytls|wireguard|http|https|socks5|socks5-tls)\s*,/im.test(text)) fail('public shell contains concrete proxy node');
 if (/\b(password|private-key|username|token)\s*=\s*[^\s,#]+/i.test(text)) fail('public shell appears to contain credentials');
+for (const line of [...active(sec.get('General')), ...active(sec.get('Proxy Group')), ...active(sec.get('Rule'))]) {
+  for (const match of line.matchAll(/https?:\/\/[^\s,"']+/gi)) {
+    try {
+      const url = new URL(match[0]);
+      const trustedRule = url.protocol === 'https:' && url.hostname === 'ruleset.skk.moe' && url.pathname.startsWith('/List/');
+      const trustedIcon = url.protocol === 'https:' && url.hostname === 'raw.githubusercontent.com' && (/^\/Aioneas\/Surge\//.test(url.pathname) || /^\/Rabbit-Spec\/Surge\//.test(url.pathname));
+      if (!trustedRule && !trustedIcon) fail(`untrusted active public URL: ${url.href}`);
+    } catch { fail(`malformed active URL: ${match[0]}`); }
+  }
+}
 
 const scenarios = [
   [], ['香港 01'], ['US-01'], ['HK-01', 'JP-01', 'SG-01', 'US-01', 'TW-01'],
@@ -320,6 +330,7 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['policy cycle', source => source.replace('🚀 手动切换 = select, 🇭🇰 香港节点,', '🚀 手动切换 = select, 🌐 兜底策略, 🇭🇰 香港节点,')],
     ['General changed', source => source.replace('ipv6 = false', 'ipv6 = true')],
     ['missing no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'GEOIP,CN,DIRECT')],
+    ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
     ['FINAL not last', source => source.replace('FINAL,🌐 兜底策略,dns-failed', 'FINAL,🌐 兜底策略,dns-failed\nDOMAIN,after-final.example,DIRECT')]
   ];
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-validator-'));
@@ -352,4 +363,4 @@ console.log(`- Compact service policies: ${COMPACT.length}`);
 console.log(`- Regional selectors/helpers: ${REGIONS.length}`);
 console.log(`- Dynamic node scenarios: ${scenarios.length}`);
 console.log('- Parser/tokenizer, policy graph, regex, rules, public safety: PASS');
-console.log('- Negative fixtures rejected normally: 14');
+console.log('- Negative fixtures rejected normally: 15');
