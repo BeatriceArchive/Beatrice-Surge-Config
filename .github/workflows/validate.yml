@@ -26,7 +26,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          check-latest: false
+          check-latest: true
 
       - name: Validate Beatrice-Surge.conf
         run: node scripts/validate-config.mjs
