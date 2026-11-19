@@ -105,14 +105,15 @@ node scripts/validate-config.mjs
 
 - section、General key、policy group 与 group parameter 去重
 - 引号、转义、行内注释、空组件等语法边界
-- General 网络行为契约
+- General 网络行为契约，以及 `always-raw-tcp-hosts` 的 Host List 格式
 - policy 引用、`include-other-group` 递归依赖、循环与 FINAL 位置
 - `AND` / `OR` / `NOT` 的受支持结构
+- 规则参数适用范围：`no-resolve`、`extended-matching`、`dns-failed`、`pre-matching` 只能出现在 Surge 手册允许的规则类型上；同一 URL 不得同时作为 RULE-SET 与 DOMAIN-SET
 - 10 个可见组与 6 个地区 helper 的零节点安全性
 - service group 不直接铺开 raw proxies
 - AI / 流媒体不得加入 `DIRECT`；Apple 必须以 `DIRECT` 为首成员
-- IP-bound rules 的 `no-resolve`
-- 活动 URL allowlist、注释 URL、安全凭据与节点泄漏检测
+- IP-bound rules（含 `RULE-SET,LAN` 与逻辑规则中的 IP 子规则）的 `no-resolve`
+- 活动 URL allowlist、注释 URL、安全凭据与节点泄漏检测（覆盖 Surge 全部代理协议关键字，注释掉的节点行同样拦截）
 - 地区 regex 的正向 / 负向场景
 - 高价值 hostname 的 first-match 路由矩阵
 - 负向 fixture 与合法演进 fixture
