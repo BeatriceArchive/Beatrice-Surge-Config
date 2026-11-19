@@ -35,8 +35,11 @@ Beatrice 的公开 Surge iOS Profile 模板。仓库只维护可公开、可验�
 当前基线包括：
 
 - `dns-server = system`
+- 代理请求保持远端解析：`use-local-host-item-for-proxy = false`
 - Surge iOS VIF-only：`compatibility-mode = 3`
 - IPv6 关闭：`ipv6 = false`、`ipv6-vif = disabled`
+- Wi-Fi 助理与混合网络关闭：`wifi-assist = false`、`all-hybrid = false`
+- UDP 优先处理开启：`udp-priority = true`
 - Wi-Fi / 热点代理共享关闭
 - `include-all-networks = true`
 - `include-local-networks = false`
@@ -86,6 +89,8 @@ Beatrice 的公开 Surge iOS Profile 模板。仓库只维护可公开、可验�
 7. 带 `no-resolve` 的 IP 规则与 GEOIP
 8. 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
+例外说明：`apple_services.conf` 上游自带 `IP-CIDR,17.0.0.0/8,no-resolve`，因此 Apple 段内存在一条 IP 规则；它与本地 RULE-SET 行的 `no-resolve` 一致，不会触发本地 DNS 解析。
+
 窄规则优先处理已知冲突：`api.github.com` 不进入 AI 聚合规则；Apple Intelligence 高于 SYSTEM；Apple 中国服务保持 DIRECT；通用 Apple 服务与主要 CDN 进入默认 DIRECT 的 `🍎 Apple`；Bilibili 在国内聚合规则之前命中。
 
 ## 确定性验证
@@ -122,7 +127,7 @@ Validator 验证的是**语义契约**，不是完整文本 hash；合法注释�
 node scripts/audit-external-rules.mjs
 ```
 
-`Audit External Rule Drift` 每周执行，也支持手动触发。它实时读取当前外部规则资源，检查可达性、格式、规模、关键契约与 first-match 路由结果。
+`Audit External Rule Drift` 每周执行，也支持手动触发。它实时读取当前外部规则资源，检查可达性、格式、规模、关键契约与 first-match 路由结果；若本地 RULE-SET 行未带 `no-resolve`，上游出现未带 `no-resolve` 的 IP 类条目也会判定失败，以免在该位置触发本地 DNS 解析。
 
 普通 fingerprint 变化本身不会失败；只有资源不可用、结构异常、关键契约消失或最终路由语义发生破坏性变化才失败。
 
