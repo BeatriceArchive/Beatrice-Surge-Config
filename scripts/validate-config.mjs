@@ -51,6 +51,18 @@ const RULE_TYPES = new Set([
 const LOGICAL_TYPES = new Set(['AND', 'OR', 'NOT']);
 const RULE_FLAGS = new Set(['no-resolve', 'dns-failed', 'extended-matching', 'pre-matching', 'requires-resolve']);
 const RULE_KEY_PARAMS = new Set(['notification-text', 'notification-interval', 'update-interval', 'always-capture']);
+// 参数适用范围以 Surge 手册 Rules Overview 的参数表为准：不适用的参数不是“无害的装饰”，而是语义错误。
+const IP_RULE_TYPES = new Set(['IP-CIDR', 'IP-CIDR6', 'GEOIP', 'IP-ASN']);
+const EXTERNAL_SET_TYPES = new Set(['RULE-SET', 'DOMAIN-SET']);
+const PARAMETER_SCOPE = new Map([
+  ['no-resolve', new Set([...IP_RULE_TYPES, ...EXTERNAL_SET_TYPES])],
+  ['dns-failed', new Set(['FINAL'])],
+  ['extended-matching', new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'URL-REGEX', ...EXTERNAL_SET_TYPES])],
+  ['pre-matching', new Set(['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', ...IP_RULE_TYPES, ...EXTERNAL_SET_TYPES, 'AND', 'OR', 'NOT', 'SRC-IP', 'DEST-PORT', 'SRC-PORT', 'SUBNET', 'CELLULAR-RADIO', 'CELLULAR-CARRIER'])],
+  ['update-interval', EXTERNAL_SET_TYPES],
+  ['requires-resolve', new Set(['SCRIPT'])]
+]);
+const REJECT_FAMILY = new Set(['REJECT', 'REJECT-DROP', 'REJECT-NO-DROP', 'REJECT-TINYGIF']);
 
 function stripComment(line) {
   let quote = null;
@@ -214,7 +226,7 @@ function logicalOperands(expression, context) {
     return operand.slice(1, -1).trim();
   });
 }
-function validateRuleParameters(components, context) {
+function validateRuleParameters(components, context, type, { subRule = false, policy = null } = {}) {
   const parameters = new Set();
   for (const component of components) {
     const i = component.indexOf('=');
@@ -222,9 +234,15 @@ function validateRuleParameters(components, context) {
     if ((i < 0 && !RULE_FLAGS.has(key)) || (i >= 0 && !RULE_KEY_PARAMS.has(key))) throw new Error(`${context}: unsupported parameter ${key}`);
     if (i >= 0 && !component.slice(i + 1).trim()) throw new Error(`${context}: empty parameter value for ${key}`);
     if (parameters.has(key)) throw new Error(`${context}: duplicate parameter ${key}`);
+    const scope = PARAMETER_SCOPE.get(key);
+    if (scope && !scope.has(type)) throw new Error(`${context}: parameter ${key} does not apply to ${type}`);
+    if (key === 'pre-matching' && subRule) throw new Error(`${context}: pre-matching cannot be placed on a logical sub-rule`);
+    if (key === 'pre-matching' && !REJECT_FAMILY.has(policy)) throw new Error(`${context}: pre-matching requires a REJECT-family policy`);
     parameters.add(key);
   }
+  return parameters;
 }
+const ipBoundRule = (type, value = '') => IP_RULE_TYPES.has(type) || (type === 'RULE-SET' && (/\/ip\//i.test(value) || value.toUpperCase() === 'LAN'));
 function validateLogical(type, expression, context, depth = 1) {
   if (depth > 10) throw new Error(`${context}: logical nesting exceeds Surge's depth limit of 10`);
   const operands = logicalOperands(expression, context);
@@ -240,7 +258,8 @@ function validateLogical(type, expression, context, depth = 1) {
       validateLogical(subType, fields[1], context, depth + 1);
     } else {
       if (fields.length < 2) throw new Error(`${context}: ${subType} operand is missing its match value`);
-      validateRuleParameters(fields.slice(2), `${context} ${subType} operand`);
+      const operandParameters = validateRuleParameters(fields.slice(2), `${context} ${subType} operand`, subType, { subRule: true });
+      if (ipBoundRule(subType, fields[1]) && !operandParameters.has('no-resolve')) throw new Error(`${context}: IP-bound ${subType} operand lost no-resolve`);
     }
   }
 }
@@ -255,7 +274,7 @@ function parseRules(lines) {
       if ((type === 'FINAL' && fields.length < 2) || (type !== 'FINAL' && fields.length < 3)) throw new Error(`rule ${line}: missing match value or policy`);
       const parameterStart = type === 'FINAL' ? 2 : 3;
       if (LOGICAL_TYPES.has(type)) validateLogical(type, fields[1], `rule ${line}`);
-      validateRuleParameters(fields.slice(parameterStart), `rule ${line}`);
+      validateRuleParameters(fields.slice(parameterStart), `rule ${line}`, type, { policy: type === 'FINAL' ? fields[1] : fields[2] });
       output.push({ raw: line, fields, type, policy: type === 'FINAL' ? fields[1] : fields[2] });
     } catch (error) { fail(error.message); }
   }
@@ -275,6 +294,15 @@ for (const required of ['General', 'Proxy Group', 'Rule']) if (!sec.has(required
 for (const name of sec.keys()) if (!['General', 'Proxy Group', 'Rule'].includes(name)) fail(`unexpected public section [${name}]`);
 
 const general = parseGeneral(sec.get('General'));
+// Host List 参数：逗号分隔、无空项；每项为可带 - 前缀、通配符与 :port 后缀的 hostname，或 <ip-address> 等特殊标记。
+for (const key of ['always-raw-tcp-hosts', 'force-http-engine-hosts']) {
+  if (!general.has(key)) continue;
+  try {
+    for (const item of csv(general.get(key), `[General] ${key}`)) {
+      if (!/^-?(?:<(?:ip-address|ipv4-address|ipv6-address|simple-hostname)>|[A-Za-z0-9*?._-]+)(?::\d{1,5})?$/.test(item)) fail(`[General] ${key}: malformed host list item ${JSON.stringify(item)}`);
+    }
+  } catch (error) { fail(error.message); }
+}
 for (const [key, expected] of REQUIRED_GENERAL) if (general.get(key)?.toLowerCase() !== expected) fail(`[General] ${key} must remain ${expected}`);
 
 const groups = parseGroups(sec.get('Proxy Group'));
@@ -346,14 +374,22 @@ if (rules.at(-1)?.type !== 'FINAL') fail('FINAL must be the last active rule');
 if (finals[0]?.policy !== MANUAL || !finals[0]?.fields.includes('dns-failed')) fail(`FINAL must use ${MANUAL} with dns-failed`);
 const uniqueRules = new Set();
 for (const rule of rules) {
-  const normalized = rule.fields.join(',');
+  const normalized = [rule.type, ...rule.fields.slice(1)].join(',');
   if (uniqueRules.has(normalized)) fail(`duplicate rule ${rule.raw}`);
   uniqueRules.add(normalized);
   if (rule.type === 'MATCH') fail('MATCH is forbidden; use FINAL');
   if (rule.policy && !groups.has(rule.policy) && !BUILTINS.has(rule.policy)) fail(`undefined rule policy ${rule.policy}`);
   if (['RULE-SET', 'DOMAIN-SET'].includes(rule.type) && /^http:\/\//i.test(rule.fields[1] || '')) fail(`external ${rule.type} must use HTTPS: ${rule.raw}`);
-  const ipBound = rule.type.startsWith('IP-') || ['GEOIP', 'IP-ASN'].includes(rule.type) || (rule.type === 'RULE-SET' && /\/ip\//i.test(rule.fields[1] || ''));
-  if (ipBound && !rule.fields.includes('no-resolve')) fail(`IP-bound rule lost no-resolve: ${rule.raw}`);
+  const ipBound = ipBoundRule(rule.type, rule.fields[1] || '');
+  if (ipBound && !rule.fields.some(field => field.toLowerCase() === 'no-resolve')) fail(`IP-bound rule lost no-resolve: ${rule.raw}`);
+}
+// Surge 手册：同一 URL / 文件不能在同一 Profile 中同时作为 RULE-SET 与 DOMAIN-SET。
+const externalSetKinds = new Map();
+for (const rule of rules.filter(rule => EXTERNAL_SET_TYPES.has(rule.type))) {
+  const resource = rule.fields[1];
+  if (['LAN', 'SYSTEM'].includes(resource.toUpperCase())) continue;
+  if (externalSetKinds.has(resource) && externalSetKinds.get(resource) !== rule.type) fail(`${resource} is used as both RULE-SET and DOMAIN-SET`);
+  else externalSetKinds.set(resource, rule.type);
 }
 subsequence(rules, [
   /^RULE-SET,LAN,DIRECT,no-resolve$/,
@@ -429,8 +465,10 @@ for (const [host, expected] of routeMatrix) {
 }
 
 if (/^\s*#!MANAGED-CONFIG\b/im.test(text)) fail('public shell must not contain managed-config');
-if (/^\s*[^#\[\n]+\s*=\s*(ss|vmess|trojan|snell|tuic|hysteria2|anytls|wireguard|http|https|socks5|socks5-tls)\s*,/im.test(text)) fail('public shell contains concrete proxy node');
-if (/\b(password|private-key|username|token)\s*=\s*[^\s,#]+/i.test(text)) fail('public shell appears to contain credentials');
+// 节点类型覆盖 Surge 手册 Proxy Protocols 的全部关键字；注释掉的节点行同样视为泄漏（服务器地址本身就是私人信息）。
+const PROXY_TYPES = 'ss|vmess|vless|trojan|snell|tuic|tuic-v5|hysteria2|anytls|masque|trust-tunnel|ssh|wireguard|tailscale|external|http|https|h2-connect|socks5|socks5-tls';
+if (new RegExp(`^\\s*(?:(?:#|;|//)\\s*)?[^#;\\[\\n=]+?\\s*=\\s*(?:${PROXY_TYPES})\\s*,`, 'im').test(text)) fail('public shell contains concrete proxy node');
+if (/\b(password|passphrase|private-key|pre-?shared-key|username|token|psk|uuid|auth-key)\s*=\s*[^\s,#]+/i.test(text)) fail('public shell appears to contain credentials');
 for (const line of [...active(sec.get('General')), ...active(sec.get('Proxy Group')), ...active(sec.get('Rule'))]) {
   for (const match of line.matchAll(/https?:\/\/[^\s,"']+/gi)) {
     try {
@@ -490,7 +528,7 @@ if (!errors.length && process.env.SKIP_LEGAL_FIXTURE !== '1') {
   const legal = text
     .replace('/Icon/Global.png', '/Icon/Final.png')
     .replace('[Rule]', "🧪 合法来源 = select, '🚀 手动选择', hidden=true\n🧪 合法扩展 = select, include-other-group='🧪 合法来源', hidden=true\n\n[Rule]")
-    .replace('# Final\n', '# Public syntax reference: https://manual.nssurge.com/rules/logical.html\nAND,((DOMAIN-SUFFIX,legal-evolution.example),(OR,((PROTOCOL,TCP),(NOT,((DEST-PORT,53)))))),🧪 合法扩展,extended-matching\n\n# Final\n');
+    .replace('# Final\n', '# Public syntax reference: https://manual.nssurge.com/rules/logical.html\nAND,((DOMAIN-SUFFIX,legal-evolution.example,extended-matching),(OR,((PROTOCOL,TCP),(NOT,((DEST-PORT,53))))),(IP-CIDR,203.0.113.0/24,no-resolve)),🧪 合法扩展\nDOMAIN,pre-matching.legal-evolution.example,REJECT,pre-matching\n\n# Final\n');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-legal-'));
   try {
     const fixturePath = path.join(directory, 'legal.conf');
@@ -552,7 +590,20 @@ if (!errors.length && process.env.SKIP_NEGATIVE_FIXTURES !== '1') {
     ['duplicate rule parameter', source => source.replace('DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,youtube.com,🌍 流媒体,extended-matching,extended-matching')],
     ['untrusted active URL', source => source.replace('https://ruleset.skk.moe/List/non_ip/ai.conf', 'https://unknown.example/private/random')],
     ['private comment URL', source => source.replace('# Final', '# old subscription: https://private.example/abcdef123456789\n# Final')],
-    ['FINAL not last', source => source.replace('FINAL,🚀 手动选择,dns-failed', 'FINAL,🚀 手动选择,dns-failed\nDOMAIN,after-final.example,DIRECT')]
+    ['FINAL not last', source => source.replace('FINAL,🚀 手动选择,dns-failed', 'FINAL,🚀 手动选择,dns-failed\nDOMAIN,after-final.example,DIRECT')],
+    ['dns-failed outside FINAL', source => source.replace('DOMAIN-SUFFIX,yt.be,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,yt.be,🌍 流媒体,dns-failed')],
+    ['no-resolve on domain rule', source => source.replace('DOMAIN-SUFFIX,yt.be,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,yt.be,🌍 流媒体,no-resolve')],
+    ['extended-matching on IP rule', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'IP-CIDR,203.0.113.0/24,DIRECT,no-resolve,extended-matching\nGEOIP,CN,DIRECT,no-resolve')],
+    ['pre-matching without REJECT', source => source.replace('DOMAIN-SUFFIX,yt.be,🌍 流媒体,extended-matching', 'DOMAIN-SUFFIX,yt.be,🌍 流媒体,extended-matching,pre-matching')],
+    ['logical IP operand without no-resolve', source => source.replace('GEOIP,CN,DIRECT,no-resolve', 'AND,((IP-CIDR,203.0.113.0/24),(DEST-PORT,443)),DIRECT\nGEOIP,CN,DIRECT,no-resolve')],
+    ['case-variant duplicate rule', source => source.replace('DOMAIN-SUFFIX,youtu.be,🌍 流媒体,extended-matching', 'domain-suffix,youtube.com,🌍 流媒体,extended-matching\nDOMAIN-SUFFIX,youtu.be,🌍 流媒体,extended-matching')],
+    ['same URL as RULE-SET and DOMAIN-SET', source => source.replace('DOMAIN,afs.ampaeservices.com,🍎 Apple,extended-matching', `RULE-SET,${APPLE_CDN_URL},🍎 Apple\nDOMAIN,afs.ampaeservices.com,🍎 Apple,extended-matching`)],
+    ['malformed raw-TCP host list', source => source.replace('io.hdslb.com:443,', 'io.hdslb.com:443,,')],
+    ['VLESS node without credentials', source => source.replace('loglevel = notify', 'loglevel = notify\nLeak = vless, 203.0.113.9, 443, flow=xtls-rprx-vision')],
+    ['commented node without credentials', source => source.replace('# Final', '# HK = trojan, 203.0.113.9, 443\n# Final')],
+    ['commented Snell PSK', source => source.replace('# Final', '# psk=Zx9pQ2rTq8\n# Final')],
+    ['commented UUID', source => source.replace('# Final', '# uuid=0233d11c-15a4-47d3-ade3-48ffca0ce119\n# Final')],
+    ['commented Tailscale auth key', source => source.replace('# Final', '# auth-key=tskey-auth-example\n# Final')]
   ];
   negativeFixtureCount = fixtures.length;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beatrice-surge-validator-'));
