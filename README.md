@@ -35,8 +35,11 @@ Beatrice 的公开 Surge iOS Profile 模板。仓库只维护可公开、可验�
 当前基线包括：
 
 - `dns-server = system`
+- 代理请求保持远端解析：`use-local-host-item-for-proxy = false`
 - Surge iOS VIF-only：`compatibility-mode = 3`
 - IPv6 关闭：`ipv6 = false`、`ipv6-vif = disabled`
+- Wi-Fi 助理与混合网络关闭：`wifi-assist = false`、`all-hybrid = false`
+- UDP 优先处理开启：`udp-priority = true`
 - Wi-Fi / 热点代理共享关闭
 - `include-all-networks = true`
 - `include-local-networks = false`
@@ -86,6 +89,8 @@ Beatrice 的公开 Surge iOS Profile 模板。仓库只维护可公开、可验�
 7. 带 `no-resolve` 的 IP 规则与 GEOIP
 8. 唯一且最后的 `FINAL,🚀 手动选择,dns-failed`
 
+例外说明：`apple_services.conf` 上游自带 `IP-CIDR,17.0.0.0/8,no-resolve`，因此 Apple 段内存在一条 IP 规则；它与本地 RULE-SET 行的 `no-resolve` 一致，不会触发本地 DNS 解析。
+
 窄规则优先处理已知冲突：`api.github.com` 不进入 AI 聚合规则；Apple Intelligence 高于 SYSTEM；Apple 中国服务保持 DIRECT；通用 Apple 服务与主要 CDN 进入默认 DIRECT 的 `🍎 Apple`；Bilibili 在国内聚合规则之前命中。
 
 ## 确定性验证
@@ -100,14 +105,15 @@ node scripts/validate-config.mjs
 
 - section、General key、policy group 与 group parameter 去重
 - 引号、转义、行内注释、空组件等语法边界
-- General 网络行为契约
+- General 网络行为契约，以及 `always-raw-tcp-hosts` 的 Host List 格式
 - policy 引用、`include-other-group` 递归依赖、循环与 FINAL 位置
 - `AND` / `OR` / `NOT` 的受支持结构
+- 规则参数适用范围：`no-resolve`、`extended-matching`、`dns-failed`、`pre-matching` 只能出现在 Surge 手册允许的规则类型上；同一 URL 不得同时作为 RULE-SET 与 DOMAIN-SET
 - 10 个可见组与 6 个地区 helper 的零节点安全性
 - service group 不直接铺开 raw proxies
 - AI / 流媒体不得加入 `DIRECT`；Apple 必须以 `DIRECT` 为首成员
-- IP-bound rules 的 `no-resolve`
-- 活动 URL allowlist、注释 URL、安全凭据与节点泄漏检测
+- IP-bound rules（含 `RULE-SET,LAN` 与逻辑规则中的 IP 子规则）的 `no-resolve`
+- 活动 URL allowlist、注释 URL、安全凭据与节点泄漏检测（覆盖 Surge 全部代理协议关键字，注释掉的节点行同样拦截）
 - 地区 regex 的正向 / 负向场景
 - 高价值 hostname 的 first-match 路由矩阵
 - 负向 fixture 与合法演进 fixture
@@ -122,7 +128,7 @@ Validator 验证的是**语义契约**，不是完整文本 hash；合法注释�
 node scripts/audit-external-rules.mjs
 ```
 
-`Audit External Rule Drift` 每周执行，也支持手动触发。它实时读取当前外部规则资源，检查可达性、格式、规模、关键契约与 first-match 路由结果。
+`Audit External Rule Drift` 每周执行，也支持手动触发。它实时读取当前外部规则资源，检查可达性、格式、规模、关键契约与 first-match 路由结果；若本地 RULE-SET 行未带 `no-resolve`，上游出现未带 `no-resolve` 的 IP 类条目也会判定失败，以免在该位置触发本地 DNS 解析。
 
 普通 fingerprint 变化本身不会失败；只有资源不可用、结构异常、关键契约消失或最终路由语义发生破坏性变化才失败。
 

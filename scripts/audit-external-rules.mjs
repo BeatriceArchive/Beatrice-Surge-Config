@@ -2,9 +2,14 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const config = fs.readFileSync(new URL('../Beatrice-Surge.conf', import.meta.url), 'utf8');
-const externalResources = [...config.matchAll(/^(RULE-SET|DOMAIN-SET),(https:\/\/[^,]+)/gm)].map(match => ({ kind: match[1], url: match[2] }));
+const externalResources = [...config.matchAll(/^(RULE-SET|DOMAIN-SET),(https:\/\/[^,]+)(.*)$/gm)].map(match => ({
+  kind: match[1],
+  url: match[2],
+  noResolve: match[3].split(',').some(field => field.trim().toLowerCase() === 'no-resolve')
+}));
 const urls = [...new Set(externalResources.map(resource => resource.url))];
 const resourceKinds = new Map(externalResources.map(resource => [resource.url, resource.kind]));
+const resourceNoResolve = new Map(externalResources.map(resource => [resource.url, resource.noResolve]));
 const failures = [];
 const downloadedRules = new Map();
 
@@ -97,6 +102,8 @@ for (const url of urls) {
       try { parsed.push(expectedKind === 'DOMAIN-SET' ? parseDomainEntry(line, key) : parseExternalRule(line, key)); }
       catch (error) { failures.push(error.message); }
       if (expectedKind === 'RULE-SET' && /(?:^|,)pre-matching(?:,|$)/.test(line)) failures.push(`${key}: forbidden rule-set entry ${line}`);
+      // 本地 RULE-SET 行未带 no-resolve 时，上游 IP 类条目必须自带 no-resolve，否则会在该位置触发本地 DNS 解析，破坏远端解析契约。
+      if (expectedKind === 'RULE-SET' && !resourceNoResolve.get(url) && /^(IP-CIDR6?|IP-ASN|GEOIP),/i.test(line) && !/(?:^|,)\s*no-resolve\s*(?:,|$)/i.test(line)) failures.push(`${key}: upstream IP rule would trigger local DNS resolution (profile line lacks no-resolve): ${line}`);
     }
     downloadedRules.set(url, parsed);
     for (const contract of expected.contains || []) if (!lines.includes(contract)) failures.push(`${key}: missing critical contract ${contract}`);
